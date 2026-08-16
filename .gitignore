@@ -1,0 +1,38 @@
+.env
+__pycache__/
+*.pyc
+output/*.json
+output/*.csv
+!output/.gitkeep
+.venv/
+*.log
+*.csv
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment variables
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Large/generated files
+output/
+outputs/
+*.log
+
+# Model/cache folders
+.paddlex/
+.cache/

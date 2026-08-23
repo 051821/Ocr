@@ -205,32 +205,41 @@ def classify_batch(manifest):
 # ENTRY POINT
 # ---------------------------------------------------------------------------
 def main():
-    print("=== STAGE 0: fetch ===")
-    manifest = fetch_batch()
-    if not manifest:
-        print("Nothing new to process.")
-        return
+    from model.db_writer import init_pool, close_pool, retry_pending_linkage
 
-    print("=== STAGE 1: CLIP classify -> filter.json ===")
-    printed_items, handwritten_items = classify_batch(manifest)
+    init_pool()
+    try:
+        print("=== DB RETRY: retry pending linkage ===")
+        retry_pending_linkage()
 
-    if printed_items:
-        print("=== STAGE 2: PaddleOCR (printed) -> output.json ===")
-        run_printed_ocr(printed_items)
-    else:
-        print("=== STAGE 2: skipped, no printed images this run ===")
+        print("=== STAGE 0: fetch ===")
+        manifest = fetch_batch()
+        if not manifest:
+            print("Nothing new to process.")
+            return
 
-    if handwritten_items:
-        print("=== STAGE 3: EC2 handwritten model -> result.json ===")
-        try:
-            start_ec2_instance()
-            run_handwritten_ocr(handwritten_items)
-        finally:
-            stop_ec2_instance()
-    else:
-        print("=== STAGE 3: skipped, no handwritten images this run ===")
+        print("=== STAGE 1: CLIP classify -> filter.json ===")
+        printed_items, handwritten_items = classify_batch(manifest)
 
-    print("=== pipeline complete ===")
+        if printed_items:
+            print("=== STAGE 2: PaddleOCR (printed) -> DB ===")
+            run_printed_ocr(printed_items)
+        else:
+            print("=== STAGE 2: skipped, no printed images this run ===")
+
+        if handwritten_items:
+            print("=== STAGE 3: EC2 handwritten model -> DB ===")
+            try:
+                start_ec2_instance()
+                run_handwritten_ocr(handwritten_items)
+            finally:
+                stop_ec2_instance()
+        else:
+            print("=== STAGE 3: skipped, no handwritten images this run ===")
+
+        print("=== pipeline complete ===")
+    finally:
+        close_pool()
 
 
 if __name__ == "__main__":

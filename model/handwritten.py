@@ -22,24 +22,7 @@ from data.data_fetcher import download_image_bytes, item_key
 from preprocessing.handwritten_preprocessing import encode_image_b64
 
 
-# ---------------------------------------------------------------------------
-# RESUMABLE JSON I/O
-# ---------------------------------------------------------------------------
-def load_existing_results():
-    if os.path.exists(config.RESULT_JSON):
-        with open(config.RESULT_JSON, "r", encoding="utf-8") as f:
-            try:
-                data = json.load(f)
-                if isinstance(data, dict):
-                    return data
-            except json.JSONDecodeError:
-                pass
-    return {}
 
-
-def save_results(all_results):
-    with open(config.RESULT_JSON, "w", encoding="utf-8") as f:
-        json.dump(all_results, f, indent=4, ensure_ascii=False)
 
 
 def text_to_lines(text):
@@ -101,41 +84,27 @@ def run_handwritten_ocr(handwritten_items, endpoint=None):
     calling this."""
     endpoint = (endpoint or config.HANDWRITTEN_ENDPOINT).rstrip("/")
 
-    all_results = load_existing_results()
-    done_keys = {
-        f"{folder}/{fname}" for folder, files in all_results.items() for fname in files
-    }
-    remaining = [it for it in handwritten_items if item_key(it) not in done_keys]
-
-    if not remaining:
+    if not handwritten_items:
         print("[handwritten] nothing new to OCR.")
-        return all_results
+        return
 
-    print(f"[handwritten] {len(remaining)} image(s) to send to {endpoint}")
+    print(f"[handwritten] {len(handwritten_items)} image(s) to send to {endpoint}")
     start = time.monotonic()
     done = 0
-    since_save = 0
 
+    from model.db_writer import insert_extracted_document
     with ThreadPoolExecutor(max_workers=config.HANDWRITTEN_CONCURRENCY) as pool:
-        futures = {pool.submit(_run_single, item, endpoint): item for item in remaining}
+        futures = {pool.submit(_run_single, item, endpoint): item for item in handwritten_items}
         for future in as_completed(futures):
             r = future.result()
             if r["status"] == "ok":
-                all_results.setdefault(r["folder_name"], {})[r["file_name"]] = text_to_lines(r["text"])
+                text_lines = text_to_lines(r["text"])
+                insert_extracted_document(r["folder_name"], r["file_name"], text_lines)
             else:
                 print(f"  FAILED {r['folder_name']}/{r['file_name']}: {r['error']}")
             done += 1
-            since_save += 1
-            if r["status"] == "failed":
-                print(f"  FAILED {r['folder_name']}/{r['file_name']}: {r['error']}")
-            if done % 10 == 0 or done == len(remaining):
+            if done % 10 == 0 or done == len(handwritten_items):
                 elapsed = time.monotonic() - start
-                print(f"  {done}/{len(remaining)} done ({elapsed:.0f}s elapsed)")
-            if since_save >= config.HANDWRITTEN_SAVE_EVERY:
-                save_results(all_results)
-                since_save = 0
+                print(f"  {done}/{len(handwritten_items)} done ({elapsed:.0f}s elapsed)")
 
-    save_results(all_results)
-    total_done = sum(len(v) for v in all_results.values())
-    print(f"[handwritten] done. {config.RESULT_JSON} has {total_done} images total.")
-    return all_results
+    print("[handwritten] done.")

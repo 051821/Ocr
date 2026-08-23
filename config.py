@@ -31,9 +31,31 @@ OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 FILTER_JSON = os.path.join(OUTPUT_DIR, "filter.json")     # CLIP classification result (per image)
-OUTPUT_JSON = os.path.join(OUTPUT_DIR, "output.json")      # printed / PaddleOCR result
-RESULT_JSON = os.path.join(OUTPUT_DIR, "result.json")      # handwritten / EC2 model result
-FINAL_CSV = os.path.join(OUTPUT_DIR, "final_report.csv")   # merged rule+LLM output
+PENDING_LINKAGE_JSON = os.path.join(OUTPUT_DIR, "pending_linkage.json")
+
+def _env_path(name, default=None):
+    val = os.environ.get(name)
+    if not val:
+        return default
+    replacements = {
+        "\r": "\\r",
+        "\t": "\\t",
+        "\n": "\\n",
+        "\b": "\\b",
+        "\f": "\\f",
+        "\a": "\\a",
+        "\v": "\\v",
+    }
+    for escape_char, raw_chars in replacements.items():
+        val = val.replace(escape_char, raw_chars)
+    return os.path.normpath(val)
+
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
+DB_POOL_MIN = _env_int("DB_POOL_MIN", 2)
+DB_POOL_MAX = _env_int("DB_POOL_MAX", 30)
+RESULT_CSV_PATH = _env_path("RESULT_CSV_PATH")
+DEFAULT_PRIORITY = _env_int("DEFAULT_PRIORITY", 0)
 
 # ---------------------------------------------------------------------------
 # DATA SOURCE (constraint: swappable later -- see data/data_fetcher.py)

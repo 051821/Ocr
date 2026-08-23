@@ -20,32 +20,17 @@ def item_key(item):
     return f"{item['folder_name']}/{item['file_name']}"
 
 
-# ---------------------------------------------------------------------------
-# SKIP-KEY COMPUTATION (constraint: never redo an image already in output.json
-# or result.json)
-# ---------------------------------------------------------------------------
-def _keys_from_nested_json(path):
-    import json
-    keys = set()
-    if not path or not os.path.exists(path):
-        return keys
-    with open(path, "r", encoding="utf-8") as f:
-        try:
-            data = json.load(f)
-        except json.JSONDecodeError:
-            return keys
-    for folder_name, images in data.items():
-        for file_name in images:
-            keys.add(f"{folder_name}/{file_name}")
-    return keys
+def skip_key(item):
+    return item["file_name"]
 
 
+# ---------------------------------------------------------------------------
+# SKIP-KEY COMPUTATION (constraint: never redo an image already in DB)
+# ---------------------------------------------------------------------------
 def load_skip_keys():
-    """Union of everything already present in output.json (printed) and
-    result.json (handwritten). filter.json is NOT a skip source -- an image
-    can be re-classified even if it was already OCR'd, but images that
-    already have OCR text should never be re-fetched/re-run."""
-    return _keys_from_nested_json(config.OUTPUT_JSON) | _keys_from_nested_json(config.RESULT_JSON)
+    """Union of everything already present in the database and pending linkages."""
+    from model import db_writer
+    return db_writer.load_skip_keys()
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +148,7 @@ def build_manifest(skip_keys=frozenset(), limit=config.FETCH_LIMIT, max_raw_scan
                 "file_id": img_file["id"],
                 "file_name": img_file["name"],
             }
-            if item_key(item) in skip_keys:
+            if skip_key(item) in skip_keys:
                 continue
             manifest.append(item)
 

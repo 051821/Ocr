@@ -14,24 +14,7 @@ from preprocessing.printed_preprocessing import preprocess_for_paddle
 from model.load_model import load_paddle_engines
 
 
-# ---------------------------------------------------------------------------
-# RESUMABLE JSON I/O
-# ---------------------------------------------------------------------------
-def load_existing_results():
-    if os.path.exists(config.OUTPUT_JSON):
-        with open(config.OUTPUT_JSON, "r", encoding="utf-8") as f:
-            try:
-                data = json.load(f)
-                if isinstance(data, dict):
-                    return data
-            except json.JSONDecodeError:
-                pass
-    return {}
 
-
-def save_results(all_results):
-    with open(config.OUTPUT_JSON, "w", encoding="utf-8") as f:
-        json.dump(all_results, f, indent=4, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
@@ -165,25 +148,19 @@ def finalize_entries(merged):
 def run_printed_ocr(printed_items):
     """printed_items: manifest items already decided as printed by the CLIP
     filter stage. Downloads bytes lazily (never fetched for handwritten
-    images), runs the dual-engine ensemble, and writes/resumes output.json."""
-    all_results = load_existing_results()
-    done_keys = {
-        f"{folder}/{fname}" for folder, files in all_results.items() for fname in files
-    }
-    remaining = [it for it in printed_items if item_key(it) not in done_keys]
-
-    if not remaining:
+    images), runs the dual-engine ensemble, and writes output to database."""
+    if not printed_items:
         print("[paddel] nothing new to OCR.")
-        return all_results
+        return
 
     print(f"[paddel] loading PaddleOCR engines on {config.PADDLE_DEVICE}...")
     ocr_en, ocr_server = load_paddle_engines()
 
     processed_since_save = 0
-    for batch_start in range(0, len(remaining), config.PADDLE_BATCH_SIZE):
-        batch_items = remaining[batch_start: batch_start + config.PADDLE_BATCH_SIZE]
+    for batch_start in range(0, len(printed_items), config.PADDLE_BATCH_SIZE):
+        batch_items = printed_items[batch_start: batch_start + config.PADDLE_BATCH_SIZE]
         print(f"[paddel] batch {batch_start // config.PADDLE_BATCH_SIZE + 1} "
-              f"({batch_start + 1}-{min(batch_start + config.PADDLE_BATCH_SIZE, len(remaining))} / {len(remaining)})")
+              f"({batch_start + 1}-{min(batch_start + config.PADDLE_BATCH_SIZE, len(printed_items))} / {len(printed_items)})")
 
         img_arrays, valid_items = [], []
         for item in batch_items:
@@ -206,19 +183,16 @@ def run_printed_ocr(printed_items):
             print(f"  ERROR on batch: {e}")
             continue
 
+        from model.db_writer import insert_extracted_document
         for item, merged in zip(valid_items, merged_batch):
             entries = finalize_entries(merged)
-            all_results.setdefault(item["folder_name"], {})[item["file_name"]] = [e["text"] for e in entries]
+            text_lines = [e["text"] for e in entries]
+            insert_extracted_document(item["folder_name"], item["file_name"], text_lines)
 
         processed_since_save += len(valid_items)
         if processed_since_save >= config.PADDLE_SAVE_EVERY:
             paddle.device.cuda.empty_cache()
             gc.collect()
-            save_results(all_results)
-            print(f"  --- progress saved ({sum(len(v) for v in all_results.values())} images total) ---")
             processed_since_save = 0
 
-    save_results(all_results)
-    print(f"[paddel] done. {config.OUTPUT_JSON} has "
-          f"{sum(len(v) for v in all_results.values())} images total.")
-    return all_results
+    print("[paddel] done.")

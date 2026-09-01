@@ -16,11 +16,12 @@ model/paddel.py             model/handwritten.py
 (printed)                   (handwritten, via EC2)
         |                           |
         v                           v
-output/output.json          output/result.json
-        \___________________________/
-                    |
-                    v
-        main.py merge_to_csv() -> output/final_report.csv
+      The extracted text is then filtered as clean text, patient imformtion
+                              |
+                              |
+                              v
+                      then get clean text, visit dates and cheif complaint from the database and perform A ai analysis
+
 ```
 
 ## Why three separate preprocessing modules
@@ -61,7 +62,7 @@ decisions per image, keyed to a fingerprint of the current thresholds --
 change any threshold in `config.py` and affected images get reclassified
 automatically.
 
-## EC2 for the handwritten model
+## 
 
 Two ways to run it:
 
@@ -83,16 +84,12 @@ Two ways to run it:
   patient folder, group by `folder` and flag folders with 3-4+ visits for a
   timeline/analysis view. Not built yet -- needs a "visit" concept the current
   JSON schema doesn't capture (currently one row per image, not per visit).
-- **Streamlit dashboard**: read `final_report.csv` (or `output.json`/`result.json`
-  directly) filtered by patient/folder ID. Not built yet.
+- **Streamlit dashboard**: Ai analysis for the patient 
 - **Full agent/rule-based orchestration**: `main.py` already runs stages 1-4
   in order and auto start/stops EC2 around stage 3 when `AUTO_MANAGE_EC2=true`.
   Turning this into an agent-driven or fully rule-based scheduler (e.g. cron,
   Airflow, or an LLM-agent loop) is the next step, not implemented here.
-- **CSV merge rules**: `main.merge_to_csv()` currently does a straightforward
-  rule-based flatten (one row per image) and calls a no-op `llm_refine_row()`
-  hook. Plug in the real reconciliation/summarization rules and the LLM call
-  once they're defined.
+- **CSV merge rules**: 
 
 ## Constraints 
 
@@ -108,8 +105,8 @@ Two ways to run it:
 1. fetch assigned limited data from the data source /data folder  currently from drive 
 2. Then i have to pass it with classification model clip then generate filter.json
 3. I have two diff model see classification then run for printed first through paddel and save to output.json.
-4. once paddel is done then i have handwritten model in ec2 it will  give an output to start ec2 model or it will start ec2 model pass handwritten images to it and generate result.json from it.
-5. once everything is done it will create csv from both the json by some rule based and llm.
+4. once paddel is done then i have handwritten model in ec2 it will  give an output to start ec2 model or it will start ec2 model pass handwritten images to it and generate 
+5. After that all the info will be written in a database as patient medical history imformation.
 6. future work 
  -- I can change data source 
  -- use table to see patient visit if more then 3-4 visit will create a analysis and time line based represention of patient condition

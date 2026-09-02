@@ -1,14 +1,9 @@
 """
 model/load_model.py
-
-All model construction/teardown lives here so paddel.py, handwritten.py, and
-main.py just call a function instead of duplicating setup code. Keeping this
-separate also matters for VRAM: CLIP is loaded and then explicitly unloaded
-before Paddle loads, so both never sit in GPU memory at once.
 """
 import gc
 import time
-
+import boto3
 import torch
 
 import config
@@ -99,7 +94,6 @@ def unload_paddle_engines():
 # the manual workflow documented at the top of the original handwritten.py.
 # ---------------------------------------------------------------------------
 def _ec2_client():
-    import boto3
     return boto3.client("ec2", region_name=config.EC2_REGION)
 
 

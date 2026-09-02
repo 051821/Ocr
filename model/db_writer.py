@@ -55,18 +55,17 @@ def split_text_lines(text_lines):
     email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'
     url_pattern = r'\b(?:www\.|https?://)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b'
     pincode_pattern = r'\b\d{6}\b|\b\d{3}\s*\d{3}\b'
-    
-    # Generic date matches e.g. 10-11-2025 or 10/11/2025
     date_regex = r'\b\d{1,2}[-/\s.]\d{1,2}[-/\s.]\d{2,4}\b|\b\d{4}[-/\s.]\d{1,2}[-/\s.]\d{1,2}\b'
 
-    # Honorifics/titles followed by capitalized letter (names). 
-    # Must exclude common medical terms containing DR like DR TB, DR-TB, DR-TB regimen.
-    # We use inline flags (?i:) for case-insensitive matching of the honorific, while keeping [A-Z] case-sensitive.
     honorific_pattern = r'\b(?i:mr|mrs|ms|miss|master|dr|prof|sr)\b\.?\s+(?!(?i:tb|tuberculosis|regimen|mono|poly|status)\b)[A-Z]'
+
+    # NEW: relation-prefix patterns very common in Indian medical reports
+    # S/O, D/O, W/O, C/O — with optional dots/spaces (s/o, s.o, s. o, S/O)
+    relation_prefix_pattern = r'\b(?i:s|d|w|c)\s*[./]\s*o\b\.?'
 
     # Keywords that indicate the line is administrative or PII
     pii_keywords = [
-        'patient name', 'guardian name', 'father name', 'husband name', 'wife name', 
+        'patient name', 'guardian name', 'father name', 'husband name', 'wife name',
         'daughter name', 'son name', 'patient address', 'patient mobile', 'patient contact',
         'contact number', 'contact no', 'mobile no', 'phone no', 'phone number', 'email id',
         'ref. physician', 'referred by', 'reported by', 'tested by', 'date of collection',
@@ -76,11 +75,47 @@ def split_text_lines(text_lines):
     ]
 
     # Individual standalone keyword indicators
+    # NEW: added 'name' and 'guardian' as bare keywords (word-boundary checked below)
     standalone_keywords = [
         'landmark', 'address', 'pincode', 'district', 'state', 'uhid', 'opd', 'ipd',
-        'physician', 'referred', 'consultant', 'radiologist',
+        'physician', 'referred', 'consultant', 'radiologist', 'name', 'guardian',
         'pathologist', 'clinic', 'hospital', 'laboratory', 'institute', 'college'
     ]
+
+    # NEW: medical vocabulary used to keep the name-shape heuristic from
+    # misfiring on short all-caps medical headings like "SPUTUM SMEAR" etc.
+    medical_vocab = {
+        'sputum', 'smear', 'afb', 'positive', 'negative', 'result', 'test',
+        'report', 'sample', 'culture', 'sensitivity', 'resistance', 'tb',
+        'mtb', 'rif', 'trace', 'detected', 'not', 'nil', 'normal', 'abnormal',
+        'grade', 'scanty', 'reflex', 'panel', 'drug', 'regimen', 'status',
+        'remarks', 'observation', 'findings', 'diagnosis', 'treatment',
+        'dose', 'dosage', 'weight', 'height', 'age', 'gender', 'sex',
+        'sample', 'specimen', 'collection', 'ward', 'bed', 'unit'
+    }
+
+    def looks_like_bare_name(s):
+        """Fallback heuristic: a short line of 2-4 alphabetic tokens, each
+        Title Case or ALL CAPS, none of which is a common medical word.
+        Catches names printed with no label and no honorific."""
+        tokens = s.split()
+        if not (2 <= len(tokens) <= 4):
+            return False
+        for tok in tokens:
+            core = re.sub(r'[^A-Za-z]', '', tok)
+            if not core:
+                return False
+            if core.lower() in medical_vocab:
+                return False
+            # must be Title Case (Rekha) or ALL CAPS (REKHA), not lowercase/mixed
+            if not (core.isupper() or (core[0].isupper() and core[1:].islower())):
+                return False
+        return True
+
+    # NEW: a lightweight inline name-span pattern used only for redacting
+    # embedded names inside otherwise-medical lines (not for classification).
+    # Matches 2-3 consecutive Title-Case/ALL-CAPS word tokens.
+    inline_name_span = r'\b(?:[A-Z][a-z]+|[A-Z]{2,})(?:\s+(?:[A-Z][a-z]+|[A-Z]{2,})){1,2}\b'
 
     for line in text_lines:
         line_str = str(line).strip()
@@ -90,73 +125,82 @@ def split_text_lines(text_lines):
         if line_str in ("```", "'''"):
             continue
 
-        # Remove [ILLEGIBLE] anywhere
-        line_str = re.sub(
-            r'\[ILLEGIBLE\]',
-            '',
-            line_str,
-            flags=re.IGNORECASE
-        ).strip()
-
+        line_str = re.sub(r'\[ILLEGIBLE\]', '', line_str, flags=re.IGNORECASE).strip()
         if not line_str:
             continue
 
         line_lower = line_str.lower()
         is_pii = False
 
-        # 1. Check if line matches honorific (e.g. Mrs. Rekha, Dr. Nayeem)
-        # We search in line_str (original case) because we require capitalized name after honorific
+        # 1. Honorific + name (Mrs. Rekha, Dr. Nayeem)
         if re.search(honorific_pattern, line_str):
             is_pii = True
 
-        # 2. Check if line contains phone, email, url, or pincode
+        # 2. Phone, email, url
         elif re.search(phone_pattern, line_str) or re.search(email_pattern, line_str) or re.search(url_pattern, line_lower):
             is_pii = True
 
-        # 3. Check if line matches pure digits or ID patterns (e.g. 201007876)
-        # Check if line is just 5+ digits or is mostly digits
+        # 3. Pure digit / ID lines
         elif re.match(r'^\s*\d{5,}\s*$', line_str):
             is_pii = True
 
-        # 4. Check for direct multi-word PII prefixes
+        # 4. Multi-word PII prefixes
         elif any(kw in line_lower for kw in pii_keywords):
             is_pii = True
 
-        # 5. Check if it contains patient demographics keywords specifically
+        # 5. Patient demographics — now flags on 'patient' alone too
         elif 'patient' in line_lower:
-            demo_kws = ['name', 'address', 'mobile', 'phone', 'contact', 'id', 'info', 'detail', 'signature', 'thumb']
-            if any(dk in line_lower for dk in demo_kws):
-                is_pii = True
+            is_pii = True
 
-        # 6. Check for standalone keywords (with word boundaries to avoid matching partial medical terms)
+        # 6. NEW: relation prefixes S/O, D/O, W/O, C/O
+        elif re.search(relation_prefix_pattern, line_str):
+            is_pii = True
+
+        # 7. Standalone keywords (word-boundary matched)
         if not is_pii:
             for kw in standalone_keywords:
                 if re.search(r'\b' + re.escape(kw) + r'\b', line_lower) or line_lower.startswith(kw):
                     is_pii = True
                     break
 
-        # 7. Check if line starts with Date or matches generic date
+        # 8. Date lines
         if not is_pii:
             if line_lower.startswith('date') or re.search(date_regex, line_str):
                 is_pii = True
 
-        # 8. Check for common header/footer junk fields containing pincodes or hospital details
+        # 9. Pincode-bearing lines
         if not is_pii:
             if re.search(pincode_pattern, line_str):
+                is_pii = True
+
+        # 10. NEW: bare unlabeled name fallback (e.g. "Rekha Sharma" on its own line)
+        if not is_pii:
+            if looks_like_bare_name(line_str):
                 is_pii = True
 
         if is_pii:
             pii_lines.append(line_str)
         else:
-            # We still redact any inline phone/emails from medical lines
+            # Redact inline phone/email as before, PLUS any embedded name-shaped
+            # spans, so names inside otherwise-medical sentences don't leak.
             cleaned_line = re.sub(phone_pattern, '', line_str)
             cleaned_line = re.sub(email_pattern, '', cleaned_line)
+
+            def _maybe_redact_name(m):
+                span_text = m.group(0)
+                tokens = [t for t in span_text.split() if re.sub(r'[^A-Za-z]', '', t).lower() not in medical_vocab]
+                # only redact if none of the tokens are recognized medical vocab
+                if len(tokens) == len(span_text.split()):
+                    return ''
+                return span_text
+
+            cleaned_line = re.sub(inline_name_span, _maybe_redact_name, cleaned_line)
             cleaned_line = re.sub(r'\s+', ' ', cleaned_line).strip()
+
             if cleaned_line:
                 medical_lines.append(cleaned_line)
 
     return pii_lines, medical_lines
-
 
 _pool = None
 _csv_lookup = None          # (person_id, imagename) -> healthcase_id

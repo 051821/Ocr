@@ -128,3 +128,6 @@ Two ways to run it:
    -- run downloaded model like paddelocr on gpu , pip install only gpu version
    
 
+
+
+ssh -i "C:\Users\91739\Downloads\handwritten.pem" -N -L 8000:127.0.0.1:8000 ec2-user@13.49.196.35   

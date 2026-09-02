@@ -1,17 +1,5 @@
 """
 main.py
-
-Orchestrates the full pipeline:
-
-    1. data/data_fetcher.py   -> pull a limited, resumable batch from Drive
-    2. STAGE 1 here (CLIP)    -> classify each image printed/handwritten -> filter.json
-    3. model/paddel.py        -> OCR the printed images                  -> output.json
-    4. model/handwritten.py   -> OCR the handwritten images (EC2 vLLM)   -> result.json
-
-Constraint recap:
-  - images already in output.json/result.json are never re-fetched (data_fetcher.load_skip_keys)
-  - each model stage has its OWN preprocessing + thresholds (see preprocessing/ and config.py)
-  - PaddleOCR must run GPU-only (config.PADDLE_DEVICE, requirements.txt pins the gpu wheel)
 """
 import gc
 import json

@@ -60,7 +60,7 @@ DEFAULT_PRIORITY = _env_int("DEFAULT_PRIORITY", 0)
 # ---------------------------------------------------------------------------
 # DATA SOURCE (constraint: swappable later -- see data/data_fetcher.py)
 # ---------------------------------------------------------------------------
-DATA_SOURCE = os.environ.get("DATA_SOURCE", "drive")  # "drive" today; add "local", "s3", etc. later
+DATA_SOURCE = os.environ.get("DATA_SOURCE", "database")  # "drive" today; add "local", "s3", etc. later
 DRIVE_API_KEY = os.environ.get("DRIVE_API_KEY")
 DRIVE_ROOT_FOLDER_ID = os.environ.get("DRIVE_ROOT_FOLDER_ID")
 DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files"
@@ -81,36 +81,35 @@ TILE_GRID = (3, 2)
 
 CLIP_PROMPTS = {
     "printed": (
-        "a photo of a medical document containing mostly machine-printed text, "
-        "uniform typed letters, printed paragraphs, tables, forms, laboratory reports, "
-        "hospital reports, discharge summaries, printed prescriptions, "
-        "computer-generated text with little or no handwriting. This includes a printed "
-        "FORM or table whose blank fields have been filled in by hand -- for example a "
-        "patient's name, date, age, or vitals written by hand into printed labeled boxes "
-        "-- as long as the headers, labels, table lines, and layout are machine-printed, "
-        "the document still counts as printed even though a few individual fields are "
-        "handwritten. It may also include a doctor's handwritten signature, an official "
-        "rubber stamp, or a barcode in a small area of the page"
+        "a photo of a machine-printed medical prescription or report, "
+        "digital hospital document, typed form with printed divider lines, "
+        "table headers, rows, and printed medication names with pen annotations"
     ),
     "handwritten": (
-        "a photo of a medical document containing mostly handwritten text, "
-        "doctor's handwriting, pen-written notes, cursive writing, irregular letters, "
-        "scribbled annotations, handwritten prescriptions, OPD tickets, "
-        "patient notes, forms filled by hand with little printed text"
+        "a photo of a mostly handwritten medical note or prescription, cursive or "
+        "pen-written text with irregular letters, including handwriting on ruled paper "
+        "or a form with only a small printed header"
+    ),
+    "non_document": (
+        "a photograph of a person's face, a hand, an object, a selfie, a landscape, "
+        "or any image that is not a paper medical document with readable text"
     ),
 }
 
 # -- CLIP-specific thresholds (tile-vote based). Do not reuse these for Paddle/EC2.
 HANDWRITTEN_THRESHOLD = _env_float("HANDWRITTEN_THRESHOLD", 0.65)
 HANDWRITTEN_MARGIN = _env_float("HANDWRITTEN_MARGIN", 0.20)
-PRINTED_SHORTCUT_THRESHOLD = _env_float("PRINTED_SHORTCUT_THRESHOLD", 0.40)
-PRINTED_SHORTCUT_MARGIN = _env_float("PRINTED_SHORTCUT_MARGIN", 0.08)
+PRINTED_SHORTCUT_THRESHOLD = _env_float("PRINTED_SHORTCUT_THRESHOLD", 0.55)
+PRINTED_SHORTCUT_MARGIN = _env_float("PRINTED_SHORTCUT_MARGIN", 0.20)
 HANDWRITTEN_SHORTCUT_ENABLED = True
-HANDWRITTEN_SHORTCUT_THRESHOLD = _env_float("HANDWRITTEN_SHORTCUT_THRESHOLD", 0.85)
-HANDWRITTEN_SHORTCUT_MARGIN = _env_float("HANDWRITTEN_SHORTCUT_MARGIN", 0.40)
+HANDWRITTEN_SHORTCUT_THRESHOLD = _env_float("HANDWRITTEN_SHORTCUT_THRESHOLD", 0.95)
+HANDWRITTEN_SHORTCUT_MARGIN = _env_float("HANDWRITTEN_SHORTCUT_MARGIN", 0.50)
 HANDWRITTEN_TILE_RATIO = _env_float("HANDWRITTEN_TILE_RATIO", 0.75)
 MIN_NON_BLANK_TILES_FOR_HANDWRITTEN = _env_int("MIN_NON_BLANK_TILES_FOR_HANDWRITTEN", 4)
 MIN_TILE_WEIGHT = _env_float("MIN_TILE_WEIGHT", 0.08)
+NON_DOCUMENT_THRESHOLD = _env_float("NON_DOCUMENT_THRESHOLD", 0.45)
+NON_DOCUMENT_MARGIN = _env_float("NON_DOCUMENT_MARGIN", 0.08)
+DOCUMENT_GATE_VERSION = "3"  # bump when routing logic changes to invalidate filter.json
 
 STRUCTURAL_OVERRIDE_ENABLED = True
 STRUCTURAL_MIN_LINES = 4
@@ -134,6 +133,8 @@ def classifier_config_fingerprint():
         str(HANDWRITTEN_SHORTCUT_ENABLED), str(HANDWRITTEN_SHORTCUT_THRESHOLD), str(HANDWRITTEN_SHORTCUT_MARGIN),
         str(HANDWRITTEN_TILE_RATIO), str(MIN_NON_BLANK_TILES_FOR_HANDWRITTEN),
         str(MIN_TILE_WEIGHT), _json.dumps(CLIP_PROMPTS, sort_keys=True),
+        str(NON_DOCUMENT_THRESHOLD), str(NON_DOCUMENT_MARGIN),
+        DOCUMENT_GATE_VERSION,
     ]
     return _hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:12]
 

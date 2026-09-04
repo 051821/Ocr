@@ -187,7 +187,12 @@ def run_printed_ocr(printed_items):
         for item, merged in zip(valid_items, merged_batch):
             entries = finalize_entries(merged)
             text_lines = [e["text"] for e in entries]
-            insert_extracted_document(item["folder_name"], item["file_name"], text_lines)
+            insert_extracted_document(
+                imagename=item["file_name"],
+                text_lines=text_lines,
+                patient_id=item.get("patient_id"),
+                visit_id=item.get("visit_id"),
+            )
 
         processed_since_save += len(valid_items)
         if processed_since_save >= config.PADDLE_SAVE_EVERY:

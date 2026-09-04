@@ -40,8 +40,15 @@ def _run_single(item, endpoint):
         raw_bytes = item.get("raw_bytes") or download_image_bytes(item["file_id"])
         image_b64, mime = encode_image_b64(raw_bytes, item["file_name"])
     except Exception as e:
-        return {"folder_name": item["folder_name"], "file_name": item["file_name"],
-                "status": "failed", "text": None, "error": f"download/encode error: {e}"}
+        return {
+            "folder_name": item["folder_name"],
+            "file_name": item["file_name"],
+            "patient_id": item.get("patient_id"),
+            "visit_id": item.get("visit_id"),
+            "status": "failed",
+            "text": None,
+            "error": f"download/encode error: {e}",
+        }
 
     payload = {
         "model": "ocr-engine",
@@ -64,14 +71,28 @@ def _run_single(item, endpoint):
             resp = requests.post(f"{endpoint}/v1/chat/completions", json=payload, timeout=config.HANDWRITTEN_TIMEOUT)
             resp.raise_for_status()
             text = resp.json()["choices"][0]["message"]["content"]
-            return {"folder_name": item["folder_name"], "file_name": item["file_name"],
-                    "status": "ok", "text": text, "error": None}
+            return {
+                "folder_name": item["folder_name"],
+                "file_name": item["file_name"],
+                "patient_id": item.get("patient_id"),
+                "visit_id": item.get("visit_id"),
+                "status": "ok",
+                "text": text,
+                "error": None,
+            }
         except Exception as e:
             last_error = str(e)
             if attempt < config.HANDWRITTEN_MAX_RETRIES:
                 time.sleep(2 * attempt)
-    return {"folder_name": item["folder_name"], "file_name": item["file_name"],
-            "status": "failed", "text": None, "error": last_error}
+    return {
+        "folder_name": item["folder_name"],
+        "file_name": item["file_name"],
+        "patient_id": item.get("patient_id"),
+        "visit_id": item.get("visit_id"),
+        "status": "failed",
+        "text": None,
+        "error": last_error,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +120,12 @@ def run_handwritten_ocr(handwritten_items, endpoint=None):
             r = future.result()
             if r["status"] == "ok":
                 text_lines = text_to_lines(r["text"])
-                insert_extracted_document(r["folder_name"], r["file_name"], text_lines)
+                insert_extracted_document(
+                    imagename=r["file_name"],
+                    text_lines=text_lines,
+                    patient_id=r.get("patient_id"),
+                    visit_id=r.get("visit_id"),
+                )
             else:
                 print(f"  FAILED {r['folder_name']}/{r['file_name']}: {r['error']}")
             done += 1

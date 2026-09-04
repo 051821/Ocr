@@ -9,14 +9,56 @@ import torch
 import config
 
 
+def _patch_safetensors_mmap():
+    """Patches safetensors.torch.load_file so if Windows throws WinError 1455
+    (paging file too small for mmap), it falls back to direct bytes reading."""
+    try:
+        import safetensors.torch
+
+        if getattr(safetensors.torch, "_is_mmap_patched", False):
+            return
+
+        _orig_load_file = safetensors.torch.load_file
+
+        def _fallback_load_file(filename, device="cpu"):
+            try:
+                return _orig_load_file(filename, device=device)
+            except (OSError, MemoryError) as e:
+                if "1455" in str(e) or "paging file" in str(e).lower() or isinstance(e, MemoryError):
+                    print("[load_model] Host memory constraint detected; attempting direct bytes read...")
+                    try:
+                        with open(filename, "rb") as f:
+                            data = f.read()
+                        tensors = safetensors.torch.load(data)
+                        del data
+                        gc.collect()
+                        if str(device) != "cpu":
+                            return {k: v.to(device) for k, v in tensors.items()}
+                        return tensors
+                    except MemoryError:
+                        raise MemoryError("Host RAM insufficient to load CLIP checkpoint into memory.")
+                raise
+
+        safetensors.torch.load_file = _fallback_load_file
+        safetensors.torch._is_mmap_patched = True
+    except Exception as e:
+        print(f"[load_model] Note: safetensors mmap patch: {e}")
+
+
 # ---------------------------------------------------------------------------
 # STAGE 1 -- CLIP
 # ---------------------------------------------------------------------------
 def load_clip_classifier(device=config.CLIP_DEVICE):
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    _patch_safetensors_mmap()
+
     import open_clip
 
     model, _, preprocess = open_clip.create_model_and_transforms(
-        config.CLIP_MODEL_NAME, pretrained=config.CLIP_PRETRAINED
+        config.CLIP_MODEL_NAME, pretrained=config.CLIP_PRETRAINED, device=device
     )
     tokenizer = open_clip.get_tokenizer(config.CLIP_MODEL_NAME)
     model = model.to(device).eval()

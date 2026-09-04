@@ -1,165 +1,117 @@
 """
 data/data_fetcher.py
-
-IMPORTANT: this module hands back RAW BYTES only, never a decoded array.
-CLIP, PaddleOCR, and the handwritten EC2 model each need the image in a
-different shape (BGR numpy tiles, resized BGR numpy, resized base64-JPEG)
--- decoding here would force one preprocessing choice on all three. Each
-consumer decodes via its own module in preprocessing/.
+Fetches medical documents from the PostgreSQL patientdocument table (Supabase storage URLs).
+Constructs a manifest without downloading images to local disk.
 """
 import os
+import sys
+from urllib.parse import unquote, urlparse
+
+# Ensure project root is in sys.path when running as a standalone script
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 import requests
+from sqlalchemy import create_engine, text
 
 import config
 
-DRIVE_FILES_URL = config.DRIVE_FILES_URL
+if not config.DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is missing from .env or config")
+
+ENGINE = create_engine(config.DATABASE_URL, pool_pre_ping=True)
 IMAGE_EXTENSIONS = config.IMAGE_EXTENSIONS
 
 
 def item_key(item):
-    return f"{item['folder_name']}/{item['file_name']}"
+    folder = item.get("folder_name")
+    return f"{folder}/{item['file_name']}" if folder else item["file_name"]
 
 
 def skip_key(item):
     return item["file_name"]
 
 
-# ---------------------------------------------------------------------------
-# SKIP-KEY COMPUTATION (constraint: never redo an image already in DB)
-# ---------------------------------------------------------------------------
+def _file_name(file_path):
+    return unquote(os.path.basename(urlparse(file_path).path))
+
+
 def load_skip_keys():
-    """Union of everything already present in the database and pending linkages."""
+    """Return image keys already present in the destination database."""
     from model import db_writer
     return db_writer.load_skip_keys()
 
 
-# ---------------------------------------------------------------------------
-# DRIVE BACKEND
-# ---------------------------------------------------------------------------
-def _drive_get(url, params):
-    resp = requests.get(url, params=params, timeout=30)
-    ctype = resp.headers.get("Content-Type", "")
-    if resp.status_code != 200 or "application/json" not in ctype:
-        print(f"[drive] HTTP {resp.status_code} from {url}")
-        print(f"[drive] Content-Type: {ctype}")
-        print(f"[drive] Body (first 500 chars): {resp.text[:500]!r}")
-        resp.raise_for_status()
-        raise RuntimeError(
-            "Drive API did not return JSON. This is usually caused by: "
-            "(1) a proxy/firewall/antivirus intercepting requests.googleapis.com, "
-            "(2) an invalid/restricted API key, or "
-            "(3) the Drive API not being enabled on the key's Cloud project."
-        )
-    return resp.json()
+def _list_database_images():
+    """Query image documents from patientdocument table."""
+    query = text(r"""
+        SELECT file_path, patient_id, visit_id
+        FROM "patientdocument"
+        WHERE file_path LIKE 'https://%.supabase.co/storage/v1/object/public/%'
+          AND file_path ~* '\.(jpg|jpeg|png|webp|gif)$'
+          AND visit_id IS NOT NULL
+        ORDER BY file_path
+    """)
+
+    with ENGINE.connect() as conn:
+        return conn.execute(query).mappings().all()
 
 
-def _list_drive_subfolders(root_folder_id, api_key):
-    query = (
-        f"'{root_folder_id}' in parents "
-        "and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-    )
-    folders, page_token = [], None
-    while True:
-        params = {
-            "q": query, "fields": "nextPageToken, files(id, name)", "pageSize": 1000,
-            "key": api_key, "supportsAllDrives": "true", "includeItemsFromAllDrives": "true",
-        }
-        if page_token:
-            params["pageToken"] = page_token
-        data = _drive_get(DRIVE_FILES_URL, params)
-        folders.extend(data.get("files", []))
-        page_token = data.get("nextPageToken")
-        if not page_token:
-            break
-    return folders
-
-
-def _list_drive_images(folder_id, api_key):
-    query = f"'{folder_id}' in parents and trashed = false"
-    files, page_token = [], None
-    while True:
-        params = {
-            "q": query, "fields": "nextPageToken, files(id, name, mimeType)", "pageSize": 1000,
-            "key": api_key, "supportsAllDrives": "true", "includeItemsFromAllDrives": "true",
-        }
-        if page_token:
-            params["pageToken"] = page_token
-        data = _drive_get(DRIVE_FILES_URL, params)
-        files.extend(data.get("files", []))
-        page_token = data.get("nextPageToken")
-        if not page_token:
-            break
-    return [f for f in files if os.path.splitext(f["name"])[1].lower() in IMAGE_EXTENSIONS]
-
-
-def download_image_bytes(file_id):
-    """Authenticated Drive API download (alt=media) -- not the public
-    uc?export=download link, which is unauthenticated, requires the file to
-    be individually link-shared, and breaks whenever Google changes the
-    confirm-token flow."""
-    url = f"{DRIVE_FILES_URL}/{file_id}"
-    resp = requests.get(
-        url,
-        params={"alt": "media", "key": config.DRIVE_API_KEY, "supportsAllDrives": "true"},
-        timeout=60,
-    )
+def download_image_bytes(file_url):
+    """Fetch image bytes in memory via HTTP GET. No file is saved locally to disk."""
+    resp = requests.get(file_url, timeout=60)
     if resp.status_code != 200:
-        print(f"[drive] HTTP {resp.status_code} downloading {file_id}: {resp.text[:300]!r}")
+        print(f"[database] HTTP {resp.status_code} downloading {file_url}: {resp.text[:300]!r}")
         resp.raise_for_status()
     return resp.content
 
 
 def build_manifest(skip_keys=frozenset(), limit=config.FETCH_LIMIT, max_raw_scan=config.MAX_RAW_SCAN):
-    """One manifest entry per NEW image (already-done keys excluded), capped
-    at `limit`. Stops scanning folders early once `limit` usable images are
-    found, or once `max_raw_scan` total images have been looked at, so a
-    small test batch doesn't require walking every folder on the drive."""
-    if config.DATA_SOURCE != "drive":
-        raise NotImplementedError(
-            f"DATA_SOURCE={config.DATA_SOURCE!r} has no fetcher yet -- add a branch here "
-            f"when you plug in a new source (local disk, S3, etc.)."
-        )
-
+    """Build a manifest of new image records from patientdocument without downloading to disk."""
+    rows = _list_database_images()
     manifest = []
     raw_scanned = 0
-    subfolders = _list_drive_subfolders(config.DRIVE_ROOT_FOLDER_ID, config.DRIVE_API_KEY)
-    print(f"[drive] found {len(subfolders)} folder(s) under root.")
 
-    for folder in subfolders:
+    print(f"[database] found {len(rows)} image record(s) matching criteria.")
+
+    for row in rows:
+        if max_raw_scan is not None and raw_scanned >= max_raw_scan:
+            print(f"[database] hit MAX_RAW_SCAN={max_raw_scan}, stopping scan early.")
+            break
+
         if limit is not None and len(manifest) >= limit:
             break
-        if max_raw_scan is not None and raw_scanned >= max_raw_scan:
-            print(f"[drive] hit MAX_RAW_SCAN={max_raw_scan}, stopping scan early.")
-            break
 
-        images = _list_drive_images(folder["id"], config.DRIVE_API_KEY)
-        if images:
-            print(f"[drive] {folder['name']}: {len(images)} image(s)")
+        raw_scanned += 1
+        file_path = row["file_path"]
+        file_name = _file_name(file_path)
 
-        for img_file in images:
-            if limit is not None and len(manifest) >= limit:
-                break
-            if max_raw_scan is not None and raw_scanned >= max_raw_scan:
-                break
-            raw_scanned += 1
-            item = {
-                "folder_id": folder["id"],
-                "folder_name": folder["name"],
-                "file_id": img_file["id"],
-                "file_name": img_file["name"],
-            }
-            if skip_key(item) in skip_keys:
-                continue
-            manifest.append(item)
+        # Skip if image name or path already processed
+        if file_name in skip_keys or file_path in skip_keys:
+            continue
 
-    print(f"[drive] scanned {raw_scanned} raw image(s) -> {len(manifest)} new usable image(s).")
+        patient_id = row["patient_id"]
+        visit_id = row["visit_id"]
+
+        manifest.append({
+            "folder_id": None,
+            "folder_name": str(patient_id) if patient_id else "",
+            "file_id": file_path,          # URL used by download_image_bytes in memory
+            "file_path": file_path,
+            "file_name": file_name,
+            "patient_id": patient_id,
+            "visit_id": visit_id,
+            "legacy_id": None,             # Null in destination DB
+            "healthcase_id": None,         # Null in destination DB
+        })
+
+    print(f"[database] scanned {raw_scanned} raw image(s) -> {len(manifest)} new usable image(s).")
     return manifest
 
 
 def fetch_batch():
-    """Public entry point used by main.py. Returns manifest items (no image
-    bytes attached yet -- bytes are pulled lazily per-stage so a CLIP-only
-    dry run doesn't pay for downloads it won't use)."""
+    """Public entry point used by main.py."""
     skip_keys = load_skip_keys()
     print(f"[data_fetcher] {len(skip_keys)} image(s) already processed, will be skipped.")
     manifest = build_manifest(skip_keys=skip_keys)
@@ -170,4 +122,4 @@ if __name__ == "__main__":
     batch = fetch_batch()
     print(f"[data_fetcher] {len(batch)} image(s) ready for stage 1 (CLIP classification).")
     for it in batch[:5]:
-        print(f"  {item_key(it)}")
+        print(f"  {it['file_name']} | patient_id={it['patient_id']} | visit_id={it['visit_id']}")

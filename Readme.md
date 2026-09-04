@@ -16,11 +16,11 @@ model/paddel.py             model/handwritten.py
 (printed)                   (handwritten, via EC2)
         |                           |
         v                           v
-      The extracted text is then filtered as clean text, patient imformtion
+      The extracted text is then filtered as clean text, patient imformtion and passed onto database tabledocument_extraction;  with other column 
                               |
                               |
                               v
-                      then get clean text, visit dates and cheif complaint from the database and perform A ai analysis
+                  then get clean text, visit dates from visit table linked via id  and cheif complaint from the database and perform A ai analysis
 
 ```
 

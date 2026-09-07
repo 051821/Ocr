@@ -149,6 +149,23 @@ def split_text_lines(text_lines):
         'temperature', 'bp', 'medicine', 'instruction', 'frequency', 'dose', 'dosage',
         'duration', 'days', 'weeks', 'months', 'review', 'follow-up', 'followup',
 
+        # Common report findings and analytes.  These are deliberately kept
+        # separate from LAB_VOCAB: the latter describes table headings, while
+        # these appear in the individual result rows OCR returns.
+        'haemoglobin', 'hemoglobin', 'hb', 'rbc', 'wbc', 'tlc', 'dlc', 'esr',
+        'platelet', 'platelets', 'pcv', 'hematocrit', 'mcv', 'mch', 'mchc',
+        'colour', 'color', 'appearance', 'clarity', 'gravity', 'ph', 'ketone',
+        'bacteria', 'crystal', 'crystals', 'pus', 'epithelial', 'cells',
+        'microscopic', 'physical', 'chemical', 'quantity', 'volume',
+        'glucose', 'sugar', 'urea', 'creatinine', 'uric', 'bilirubin',
+        'albumin', 'globulin', 'protein', 'cholesterol', 'triglycerides',
+        'hdl', 'ldl', 'vldl', 'sodium', 'potassium', 'calcium', 'chloride',
+        'tsh', 'thyroid', 'sgot', 'sgpt', 'alp', 'crp', 'vitamin', 'b12',
+        'culture', 'sensitivity', 'positive', 'negative', 'reactive',
+        'nonreactive', 'impression', 'assessment', 'provisional', 'findings',
+        'history', 'examination', 'palpitation', 'dizziness', 'diarrhea',
+        'constipation', 'fatigue', 'anemia', 'anaemia', 'jaundice',
+
         # Common medications
         'amlodipine', 'telmisartan', 'metformin', 'ecosprin', 'ecopsrin', 'tramadol',
         'calcium', 'd3', 'methocobalmin', 'methylcobalamin', 'paracetamol', 'pantoprazole',
@@ -174,15 +191,16 @@ def split_text_lines(text_lines):
         age_sex = re.search(
             r'(?i)\b(?:age\s*[/,&-]?\s*(?:gender|sex)?\s*[:.-]?\s*)?'
             r'(\d{1,3})\s*(?:yrs?|years?|y)?(?:\s*[/|-]\s*|\s+)'
-            r'(male|female|ml|fl|m|f)\b',
+            # ``N`` is a frequent OCR substitution for the printed ``M``.
+            r'(male|female|ml|fl|m|f|n)\b',
             line,
         )
         if age_sex:
             age, gender = age_sex.groups()
             return f"Age/Sex: {age}/{'F' if gender.lower().startswith('f') else 'M'}"
 
-        age = re.search(r'(?i)\bage\s*[:.-]?\s*(\d{1,3})\b', line)
-        gender = re.search(r'(?i)\b(?:gender|sex)\s*[:.-]?\s*(male|female|ml|fl|m|f)\b', line)
+        age = re.search(r'(?i)\bage\s*[:/.,-]?\s*(\d{1,3})\b', line)
+        gender = re.search(r'(?i)\b(?:gender|sex)\s*[:/.,-]?\s*(male|female|ml|fl|m|f|n)\b', line)
         if age and gender:
             sex = 'F' if gender.group(1).lower().startswith('f') else 'M'
             return f"Age/Sex: {age.group(1)}/{sex}"
@@ -219,6 +237,15 @@ def split_text_lines(text_lines):
 
     def is_lab_value_or_range(line):
         """Match an OCR cell containing only a lab result or reference range."""
+        if re.match(
+            r'^\s*[:\uff1a]?\s*(?:absent|present|positive|negative|nil|trace|'
+            r'clear|turbid|yellow|pale\s+yellow|normal|abnormal|reactive|'
+            r'non[-\s]?reactive|few|moderate|many|none|/\s*hpf|/\s*lpf|'
+            r'(?:mg|g|ml|mmol|meq)\s*/\s*(?:dl|l)|ml)\s*$',
+            line,
+            re.IGNORECASE,
+        ):
+            return True
         return bool(re.match(
             r'^\s*[:：]?\s*(?:[<>≤≥]\s*)?\d+(?:\.\d+)?'
             r'(?:\s*(?:-|–|—|to)\s*(?:[<>≤≥]\s*)?\d*(?:\.\d+)?)?\s*$',
@@ -236,7 +263,7 @@ def split_text_lines(text_lines):
         if re.search(r'\b(?:tab(?:\.|\b)|cap(?:\.|\b)|syr(?:\.|\b)|inj(?:\.|\b)|oint(?:\.|\b)|drops?|susp(?:\.|\b)|cream|gel|lotion)\b', lower):
             return True
         # Core medical diagnosis / clinical terms
-        if re.search(r'\b(?:htn|t2dm|t1dm|dm|hypertension|diabetes|daibetic|diabetic|knee\s+pain|neck\s+pain|chest\s+pain|back\s+pain|clinical\s+notes?|diagnosis|recom(?::|\b)|blood\s+test|lipid\s+profile|cbc|rbs|fbs|ppbs|kft|lft|hba1c|ecg|xray|x-ray|cs\s+spine|bp\s+monitoring|low\s+salt)\b', lower):
+        if re.search(r'\b(?:htn|t2dm|t1dm|dm|hypertension|diabetes|daibetic|diabetic|knee\s+pain|neck\s+pain|chest\s+pain|back\s+pain|clinical\s+notes?|diagnosis|recom(?::|\b)|blood\s+test|lipid\s+profile|cbc|rbs|fbs|ppbs|kft|lft|hba1c|ecg|xray|x-ray|cs\s+spine|bp\s+monitoring|low\s+salt|ha?emoglobin|\bhb\b|rbc|wbc|tlc|dlc|platelets?|hematocrit|mcv|mchc?|glucose|creatinine|bilirubin|cholesterol|triglycerides?|\b(?:hdl|ldl|vldl|tsh|sgot|sgpt|crp)\b|uric\s+acid|electrolytes?|culture\s*(?:&|and)?\s*sensitivity|impression|provisional\s+diagnosis|clinical\s+findings?)\b', lower):
             return True
         # Table headers in Rx section
         if lower in ('medicine', 'instruction', 'frequency', 'rx', 'diagnosis', 'clinical notes', 'investigations', 'blood test'):
@@ -293,6 +320,16 @@ def split_text_lines(text_lines):
         # Check for pure metadata date/timestamp lines (e.g. "Mar 11, 2026, 11:53 AM")
         is_pure_date = bool(re.match(r'^(?:date\s*[:.-]?\s*)?' + date_regex + r'(?:\s*,\s*\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm)?)?\s*$', line_str, re.IGNORECASE))
         if is_pure_date:
+            pii_lines.append(line_str)
+            continue
+
+        # Age and sex are permitted clinical demographics, even if OCR puts
+        # them on the same line as a patient's name or other PII.  Store the
+        # normalised value in clean_text while retaining the original line in
+        # extracted_text for the PII filter.
+        demographic_text = extract_age_gender(line_str)
+        if demographic_text and re.search(r'\b(?:age|sex|gender)\b', line_lower):
+            medical_lines.append(demographic_text)
             pii_lines.append(line_str)
             continue
 
@@ -383,13 +420,13 @@ def split_text_lines(text_lines):
                 is_pii = True
 
         # 12. Bare unlabeled name fallback (e.g. "Jijabai Dhoke" on its own line)
-        if not is_pii:
+        if not is_pii and not in_lab_section:
             if looks_like_bare_name(line_str):
                 is_pii = True
 
         if is_pii:
             pii_lines.append(line_str)
-        elif has_medical_content(line_str) or (in_lab_section and is_lab_value_or_range(line_str)):
+        elif has_medical_content(line_str) or in_lab_section:
             cleaned_line = re.sub(phone_pattern, '', line_str)
             cleaned_line = re.sub(email_pattern, '', cleaned_line)
             cleaned_line = re.sub(r'\s+', ' ', cleaned_line).strip()

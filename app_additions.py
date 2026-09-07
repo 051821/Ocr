@@ -1,48 +1,26 @@
-import streamlit as st
-
-from analysis import fetch_patient_history
-from Zai_analysis import analyze_patient_with_ai
-
-st.set_page_config(
-    page_title="Patient Analysis",
-    layout="wide"
-)
-
-st.title("Patient Longitudinal Analysis")
-
-patient_id = st.text_input("Enter Patient ID").strip()
-
-if st.button("Get Patient History") and patient_id:
-    with st.spinner("Fetching patient history..."):
-        patient_data = fetch_patient_history(patient_id)
-
-    if patient_data["total_visits"] == 0:
-        st.warning("No records found for this patient.")
-    else:
-        st.success(f"Found {patient_data['total_visits']} visits")
-
-        for index, visit in enumerate(patient_data["visits"], start=1):
-            with st.expander(f"Visit {index} | {visit['visit_date'] or 'Unknown Date'}"):
-                st.write("**provisional_diagnosis:**", visit.get("provisional_diagnosis") or "Not documented")
-                st.write("**confirmed_diagnosis:**", visit.get("confirmed_diagnosis") or "Not documented")
-                st.write("**Clinical Information:**")
-                st.text(visit.get("medical_text") or "No clinical information available.")
-                st.divider()
-
-        if st.button("View AI Analysis"):
-            with st.spinner("Generating AI analysis..."):
-                ai_output = analyze_patient_with_ai(patient_data)
-            st.code(ai_output)
+# ---------------------------------------------------------------------------
+# ADD to app.py — new section below your existing "View AI Analysis" button.
+# This calls the new Stage 5-16 pipeline instead of the old single-shot
+# summarizer, and renders the structured lab trends / medication history /
+# diagnosis history alongside the LLM narrative report.
+# ---------------------------------------------------------------------------
 
 from pipeline_integration import run_patient_pipeline
-
+import streamlit as st
 st.divider()
 st.subheader("Longitudinal Clinical Analysis")
 
 if st.button("Run Longitudinal Clinical NLP Analysis") and patient_id:
     with st.spinner("Extracting clinical events, deduplicating, building timeline..."):
         result = run_patient_pipeline(patient_id, generate_report=False)
+    # persist across reruns instead of a local variable
+    st.session_state["longitudinal_result"] = result
+    st.session_state["longitudinal_patient_id"] = patient_id
 
+# read from session_state, not from the block above, so it survives reruns
+result = st.session_state.get("longitudinal_result")
+
+if result is not None:
     if result["analysis"] is None:
         st.warning("No records found for this patient.")
     else:
@@ -91,12 +69,17 @@ if st.button("Run Longitudinal Clinical NLP Analysis") and patient_id:
         with st.expander("Raw structured payload (for the LLM report)"):
             st.json(analysis)
 
+        # this button is now a sibling, not nested inside the first `if`,
+        # and reads `analysis` from session_state — so it survives the rerun
         if st.button("Generate Narrative Report (LLM)"):
             with st.spinner("Generating longitudinal report..."):
                 try:
                     from longitudinal.report_generator import generate_longitudinal_report
                     report_text = generate_longitudinal_report(analysis)
-                    st.markdown("### Longitudinal Patient Report")
-                    st.markdown(report_text)
+                    st.session_state["longitudinal_report"] = report_text
                 except RuntimeError as e:
                     st.error(str(e))
+
+        if "longitudinal_report" in st.session_state:
+            st.markdown("### Longitudinal Patient Report")
+            st.markdown(st.session_state["longitudinal_report"])

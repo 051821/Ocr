@@ -62,11 +62,26 @@ def _classify_tiles(tiles_pil, clip_bundle):
 
 def classify_image(img_bgr, clip_bundle):
     """Returns (is_handwritten | None, details). ``None`` means non-document.
-    Mirrors the tiered
-    decision from the original test.py: structural override first, then a
-    high-confidence whole-page shortcut, then a weighted tile vote as the
-    fallback.  The shortcut deliberately has a high bar: photos of dense
-    handwriting can otherwise look "printed" at page scale."""
+    Uses a whole-page non-document gate followed by a weighted tile vote.
+    A ruled form is not proof that its contents are printed: handwritten
+    forms must be allowed to reach the handwriting OCR path.
+
+    NOTE ON BIAS FIXES (see inline comments below for detail): the tile vote
+    used to have three compounding biases that all defaulted ambiguous or
+    sparse pages to "printed":
+      1. non_document tile weight was counted in the ratio denominator but
+         could never contribute to the handwritten numerator, silently
+         diluting handwritten_ratio.
+      2. a tile only voted "handwritten" if it cleared BOTH an absolute
+         probability threshold AND a margin over "printed" -- a tile that
+         leaned handwritten but didn't clear that bar contributed to the
+         denominator but nothing to either numerator, i.e. it was treated
+         as a printed vote without ever actually being classified printed.
+      3. insufficient/blank tile evidence (e.g. very light or sparse
+         handwriting under the per-tile ink-density floor) hard-defaulted
+         to printed instead of falling back to the whole-page global CLIP
+         probabilities that are already computed earlier in this function.
+    """
     labels = clip_bundle["labels"]
     printed_idx = labels.index("printed")
     handwritten_idx = labels.index("handwritten")
@@ -80,15 +95,6 @@ def classify_image(img_bgr, clip_bundle):
             (g_non_doc - max(g_pr, g_hw)) >= config.NON_DOCUMENT_MARGIN:
         return None, {"decision": "whole_page_non_document", "non_document_prob": round(g_non_doc, 3),
                       "global_printed_prob": round(g_pr, 3), "global_handwritten_prob": round(g_hw, 3)}
-
-    # A document has passed the non-document gate, so table structure may now
-    # safely force it to the printed OCR path.
-    if config.STRUCTURAL_OVERRIDE_ENABLED and has_table_structure(img_bgr):
-        return False, {"decision": "structural_table_override", "non_document_prob": round(g_non_doc, 3)}
-
-    if g_pr >= config.PRINTED_SHORTCUT_THRESHOLD and (g_pr - g_hw) >= config.PRINTED_SHORTCUT_MARGIN:
-        return False, {"decision": "whole_page_printed", "global_printed_prob": round(g_pr, 3),
-                        "global_handwritten_prob": round(g_hw, 3)}
 
     if config.HANDWRITTEN_SHORTCUT_ENABLED and g_hw >= config.HANDWRITTEN_SHORTCUT_THRESHOLD and \
             (g_hw - g_pr) >= config.HANDWRITTEN_SHORTCUT_MARGIN:
@@ -107,7 +113,15 @@ def classify_image(img_bgr, clip_bundle):
         chunk = pil_tiles[start:start + config.CLIP_BATCH_SIZE]
         tile_probs.extend(_classify_tiles(chunk, clip_bundle))
 
-    weighted_handwritten = weighted_non_document = weighted_total = 0.0
+    # weighted_handwritten / weighted_printed / weighted_non_document are
+    # mutually exclusive buckets -- every non-blank tile's weight lands in
+    # exactly one of them. weighted_total tracks all non-blank tile weight
+    # (used only for the non-document ratio, which legitimately needs to
+    # consider the whole page). The handwritten-vs-printed ratio below uses
+    # its own denominator (document_weight) that excludes non_document
+    # weight, so a few ambiguous/non-document-looking tiles can no longer
+    # dilute the handwritten score without ever being able to help it.
+    weighted_handwritten = weighted_printed = weighted_non_document = weighted_total = 0.0
     non_blank_tiles = 0
     for row, density in zip(tile_probs, ink_densities):
         hw_p, pr_p = float(row[handwritten_idx]), float(row[printed_idx])
@@ -117,24 +131,66 @@ def classify_image(img_bgr, clip_bundle):
         non_blank_tiles += 1
         weight = max(density, config.MIN_TILE_WEIGHT)
         weighted_total += weight
+
         if non_doc_p >= config.NON_DOCUMENT_THRESHOLD and non_doc_p > max(hw_p, pr_p):
             weighted_non_document += weight
+            continue
+
+        # Every remaining (document) tile casts a full vote for whichever
+        # class it leans toward, using the configured threshold/margin as a
+        # measure of *how confidently* it leans handwritten rather than as
+        # a hard gate that silently discards ambiguous-but-handwritten-
+        # leaning tiles into a de facto "printed" bucket. A tile that
+        # clears the strict handwritten bar counts fully as handwritten; a
+        # tile that merely leans handwritten (hw_p > pr_p) without clearing
+        # the strict bar still counts as handwritten, just via the softer
+        # comparison -- it is never dropped on the floor.
         if hw_p >= config.HANDWRITTEN_THRESHOLD and (hw_p - pr_p) >= config.HANDWRITTEN_MARGIN:
             weighted_handwritten += weight
+        elif hw_p > pr_p:
+            weighted_handwritten += weight
+        else:
+            weighted_printed += weight
 
     if non_blank_tiles == 0 or weighted_total == 0:
-        return False, {"decision": "all_tiles_blank", "global_printed_prob": round(g_pr, 3),
-                        "global_handwritten_prob": round(g_hw, 3)}
+        # No usable tile evidence at all (e.g. very light/faint handwriting
+        # entirely under the per-tile ink-density floor). Fall back to the
+        # whole-page global CLIP probabilities computed above instead of
+        # silently defaulting to printed.
+        fallback_hw = g_hw > g_pr
+        return fallback_hw, {
+            "decision": "all_tiles_blank_global_fallback",
+            "global_printed_prob": round(g_pr, 3), "global_handwritten_prob": round(g_hw, 3),
+        }
     if non_blank_tiles < config.MIN_NON_BLANK_TILES_FOR_HANDWRITTEN:
-        return False, {"decision": "insufficient_tile_evidence", "non_blank_tiles": non_blank_tiles,
-                        "global_printed_prob": round(g_pr, 3), "global_handwritten_prob": round(g_hw, 3)}
+        # Too few non-blank tiles for a reliable tile vote (e.g. sparse
+        # handwriting on an otherwise mostly-blank page). Same reasoning:
+        # trust the whole-page global probabilities rather than defaulting
+        # to printed.
+        fallback_hw = g_hw > g_pr
+        return fallback_hw, {
+            "decision": "insufficient_tile_evidence_global_fallback", "non_blank_tiles": non_blank_tiles,
+            "global_printed_prob": round(g_pr, 3), "global_handwritten_prob": round(g_hw, 3),
+        }
 
-    handwritten_ratio = weighted_handwritten / weighted_total
     non_document_ratio = weighted_non_document / weighted_total
     if non_document_ratio >= config.HANDWRITTEN_TILE_RATIO:
         return None, {"decision": "tile_vote_non_document", "non_document_ratio": round(non_document_ratio, 3),
                       "non_blank_tiles": non_blank_tiles, "global_printed_prob": round(g_pr, 3),
                       "global_handwritten_prob": round(g_hw, 3)}
+
+    document_weight = weighted_handwritten + weighted_printed
+    if document_weight == 0:
+        # Every non-blank tile landed in the non_document bucket but didn't
+        # clear the non_document_ratio threshold above -- fall back to
+        # global probabilities rather than dividing by zero / defaulting.
+        fallback_hw = g_hw > g_pr
+        return fallback_hw, {
+            "decision": "no_document_tile_weight_global_fallback",
+            "global_printed_prob": round(g_pr, 3), "global_handwritten_prob": round(g_hw, 3),
+        }
+
+    handwritten_ratio = weighted_handwritten / document_weight
     is_handwritten = handwritten_ratio >= config.HANDWRITTEN_TILE_RATIO
     return is_handwritten, {
         "decision": "tile_vote", "handwritten_ratio": round(handwritten_ratio, 3),

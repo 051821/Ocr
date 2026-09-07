@@ -18,3 +18,6 @@ paddleocr
 
 # --- EC2 lifecycle (only needed if AUTO_MANAGE_EC2=true) ---
 boto3
+spacy 
+medspacy 
+scispacy

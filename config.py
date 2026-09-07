@@ -81,14 +81,21 @@ TILE_GRID = (3, 2)
 
 CLIP_PROMPTS = {
     "printed": (
-        "a photo of a machine-printed medical prescription or report, "
-        "digital hospital document, typed form with printed divider lines, "
-        "table headers, rows, and printed medication names with pen annotations"
+        "a photo of a fully machine-printed or typed medical document with no "
+        "handwritten content at all -- for example a computer-generated report, a "
+        "typed prescription, or a printed lab result where every field, including "
+        "patient details, diagnosis, and medication names, is printed or typed rather "
+        "than written by hand"
     ),
     "handwritten": (
-        "a photo of a mostly handwritten medical note or prescription, cursive or "
-        "pen-written text with irregular letters, including handwriting on ruled paper "
-        "or a form with only a small printed header"
+        "a photo of a medical prescription or form that contains handwritten pen or "
+        "pencil writing that needs to be read -- such as handwritten vitals, diagnosis, "
+        "drug names, dosage, or doctor's notes -- even when the page also has a printed "
+        "letterhead, printed table borders, ruled lines, or a printed form template with "
+        "labels like 'Name', 'Address', 'BP', 'Drug Name', 'Route', or 'Days'. Any page "
+        "where the medically important content -- symptoms, diagnosis, medicines, dosage "
+        "instructions, or vitals -- is written by hand counts as handwritten, no matter "
+        "how much of the surrounding form or header is printed"
     ),
     "non_document": (
         "a photograph of a person's face, a hand, an object, a selfie, a landscape, "
@@ -109,7 +116,7 @@ MIN_NON_BLANK_TILES_FOR_HANDWRITTEN = _env_int("MIN_NON_BLANK_TILES_FOR_HANDWRIT
 MIN_TILE_WEIGHT = _env_float("MIN_TILE_WEIGHT", 0.08)
 NON_DOCUMENT_THRESHOLD = _env_float("NON_DOCUMENT_THRESHOLD", 0.45)
 NON_DOCUMENT_MARGIN = _env_float("NON_DOCUMENT_MARGIN", 0.08)
-DOCUMENT_GATE_VERSION = "3"  # bump when routing logic changes to invalidate filter.json
+DOCUMENT_GATE_VERSION = "4"  # bump when routing logic changes to invalidate filter.json
 
 STRUCTURAL_OVERRIDE_ENABLED = True
 STRUCTURAL_MIN_LINES = 4

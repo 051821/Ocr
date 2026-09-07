@@ -2,10 +2,14 @@ from ollama import chat
 from patient_timeline import create_patient_timeline
 
 
+from ollama import chat
+from patient_timeline import create_patient_timeline
+
+
 def build_longitudinal_analysis_prompt(patient_data):
     timeline = create_patient_timeline(patient_data)
 
-    return f"""
+    prompt = f"""
 You are a medical record analysis assistant.
 
 Analyze the following patient's longitudinal medical history chronologically.
@@ -36,22 +40,24 @@ Return your response using these sections:
 ## Data Gaps and Limitations
 
 PATIENT HISTORY:
-
 {timeline}
 """.strip()
 
+    return prompt
+
 
 def analyze_patient_with_ai(patient_data):
-    prompt = build_longitudinal_analysis_prompt(patient_data)
+    try:
+        prompt = build_longitudinal_analysis_prompt(patient_data)
 
-    response = chat(
-        model="qwen3:4b",
-        messages=[
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ]
-    )
+        response = chat(
+            model="qwen3:4b",
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
+        )
 
-    return response.message.content
+        return response.message.content
+
+    except Exception as e:
+        raise RuntimeError(f"AI analysis failed: {type(e).__name__}: {str(e)}")

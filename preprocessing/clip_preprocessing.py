@@ -63,7 +63,15 @@ def has_table_structure(
 ):
     """Hard override: a page with printed horizontal/vertical divider lines
     or table structure is treated as printed even if CLIP's tile vote leans
-    handwritten (e.g. a prescription form with handwritten notes or tick marks)."""
+    handwritten (e.g. a prescription form with handwritten notes or tick marks).
+
+    NOTE: A single axis of many, regularly-spaced horizontal lines is the
+    signature of ruled/lined notebook paper, not a printed table. Real tables
+    have dividers on BOTH axes. Requiring only horizontal_count >= min_lines
+    (as the old `or` fallback did) misclassifies handwritten notes on ruled
+    paper as printed. We now always require at least one vertical line
+    before this can fire as a table override, regardless of require_both_axes.
+    """
     if img_bgr is None or img_bgr.size == 0:
         return False
     h, w = img_bgr.shape[:2]
@@ -124,9 +132,19 @@ def has_table_structure(
             horizontal_count = max(horizontal_count, h_hough)
             vertical_count = max(vertical_count, v_hough)
 
+    # A real table needs structure on BOTH axes. Pages with only horizontal
+    # lines (ruled/lined paper) must never qualify, regardless of how many
+    # horizontal lines are present or what require_both_axes is set to.
+    if horizontal_count < min_lines or vertical_count < 1:
+        return False
+
     if require_both_axes:
         return horizontal_count >= min_lines and vertical_count >= 1
-    return horizontal_count >= min_lines or (horizontal_count >= 1 and vertical_count >= 1)
+
+    # require_both_axes == False just relaxes how strict we are about the
+    # horizontal count/vertical count relationship beyond the hard minimums
+    # already enforced above -- it no longer allows a vertical-free pass.
+    return True
 
 
 def cv_classify_document(img_bgr):
@@ -139,12 +157,44 @@ def cv_classify_document(img_bgr):
     thresh = cv2.adaptiveThreshold(~gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, -2)
 
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(thresh)
+
+    # NOTE: previously these sparse-content bailouts returned "printed"
+    # (False) unconditionally on low component/label counts. A page with a
+    # small amount of handwriting (e.g. a short note, a few lines of script)
+    # can easily fall under these thresholds despite genuinely containing
+    # handwritten content -- it just doesn't have much content at all. We now
+    # check ink density first: if there IS meaningful ink on the page, we
+    # don't default to "printed" just because there are few components; we
+    # fall through to a lighter-weight stroke check instead of a blind
+    # bailout.
+    ink_density = compute_ink_density(img_bgr)
+    SPARSE_INK_FLOOR = 0.01  # below this, treat the page as genuinely blank/sparse
+
     if num_labels <= 10:
-        return False, {"decision": "cv_blank_or_sparse"}
+        if ink_density < SPARSE_INK_FLOOR:
+            return False, {"decision": "cv_blank_or_sparse", "ink_density": round(float(ink_density), 4)}
+        # Some ink present despite few connected components (e.g. a short
+        # handwritten note, large loose cursive strokes that merge into a
+        # handful of blobs). Don't default to printed -- fall through to
+        # stroke analysis below using whatever components exist.
 
     valid_stats = [s for s in stats[1:] if 15 <= s[4] <= 0.05 * h * w and 5 <= s[3] <= 150]
     if len(valid_stats) < 15:
-        return False, {"decision": "cv_insufficient_components"}
+        if ink_density < SPARSE_INK_FLOOR:
+            return False, {"decision": "cv_insufficient_components", "ink_density": round(float(ink_density), 4)}
+        # Same reasoning as above: real ink on the page, just not enough
+        # "component-shaped" ink to hit the threshold. Rather than default
+        # to printed, fall through and do our best with what's available.
+        if not valid_stats:
+            # Truly nothing usable to analyze despite ink_density > floor
+            # (e.g. large connected wash of ink, heavy smudging). We can't
+            # run stroke-shape analysis without components, so bail out
+            # honestly as "undetermined" rather than silently mislabeling
+            # it printed.
+            return True, {
+                "decision": "cv_ink_present_no_components",
+                "ink_density": round(float(ink_density), 4),
+            }
 
     heights = [int(s[3]) for s in valid_stats]
     median_h = float(np.median(heights))
@@ -153,11 +203,40 @@ def cv_classify_document(img_bgr):
     proj = np.sum(thresh, axis=1) / 255.0
     whitespace_rows = float(np.sum(proj < (0.01 * w))) / float(h)
 
-    # Machine printed documents have high character uniformity and distinct row gaps
-    is_hw = bool(regular_h_ratio < 0.55 and whitespace_rows < 0.15)
+    # Third, independent signal: stroke-width irregularity via distance
+    # transform. Printed fonts have a roughly constant stroke width (font
+    # weight is fixed); handwriting has much more variable stroke width
+    # (pen pressure, speed, pen lift/re-touch). We measure this as the
+    # coefficient of variation (std / mean) of the distance-transform peak
+    # values sampled along the ink -- high CV suggests handwriting.
+    dist = cv2.distanceTransform(thresh, cv2.DIST_L2, 5)
+    stroke_samples = dist[dist > 0]
+    if stroke_samples.size >= 20:
+        mean_stroke = float(np.mean(stroke_samples))
+        stroke_width_cv = float(np.std(stroke_samples) / mean_stroke) if mean_stroke > 0 else 0.0
+    else:
+        stroke_width_cv = 0.0
+
+    # Each signal casts one vote for "handwritten". Machine-printed documents
+    # tend to have high character-height uniformity, distinct/regular row
+    # gaps, and uniform stroke width -- so each of these being "irregular"
+    # independently suggests handwriting. Requiring ALL signals to agree
+    # (the old `and` logic) meant a single noisy or ambiguous signal (e.g.
+    # neat print-style handwriting with fairly uniform heights, or dense
+    # notes with little blank-row whitespace) would force a false "printed"
+    # result even when the other signals correctly indicated handwriting.
+    # A majority vote is far more robust to any single feature being
+    # inconclusive on a given page.
+    votes_hw = 0
+    votes_hw += int(regular_h_ratio < 0.55)
+    votes_hw += int(whitespace_rows < 0.15)
+    votes_hw += int(stroke_width_cv > 0.35)
+
+    is_hw = votes_hw >= 2
     return is_hw, {
         "decision": "cv_stroke_analysis",
         "regular_h_ratio": round(float(regular_h_ratio), 3),
         "whitespace_rows": round(float(whitespace_rows), 3),
+        "stroke_width_cv": round(float(stroke_width_cv), 3),
+        "votes_hw": votes_hw,
     }
-

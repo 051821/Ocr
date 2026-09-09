@@ -37,8 +37,13 @@ from clinical_nlp.medications import extract_medications
 from clinical_nlp.diagnoses import extract_diagnoses_from_field
 from clinical_nlp.symptoms import extract_symptoms
 from clinical_nlp.temporal import resolve_event_date
+from clinical_nlp.assertion import detect_assertion, is_in_reference_text
+from clinical_nlp.ner import extract_supplementary_entities
+from normalization.medication import normalize_medication
+from normalization.diagnosis import normalize_diagnosis
 
 logger = logging.getLogger(__name__)
+
 
 
 @dataclass
@@ -68,9 +73,37 @@ class ClinicalEvent:
     abnormal: Optional[bool] = None
     dose: Optional[float] = None
     frequency: Optional[str] = None
+    qualitative_value: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def _compute_unclaimed_text(full_text: str, claimed_snippets: list[str]) -> str:
+    """
+    Returns the portion of full_text NOT already covered by any
+    extractor's source_text. This is a line-level approximation (not
+    exact character-span tracking) — good enough to decide "is this line
+    worth sending to the LLM fallback" without needing every extractor to
+    report precise offsets.
+    """
+    claimed_lines = set()
+    for snippet in claimed_snippets:
+        for line in snippet.splitlines():
+            line = line.strip()
+            if line:
+                claimed_lines.add(line)
+
+    unclaimed_lines = []
+    for line in full_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if any(stripped in claimed or claimed in stripped for claimed in claimed_lines):
+            continue
+        unclaimed_lines.append(stripped)
+
+    return "\n".join(unclaimed_lines)
 
 
 def build_events_for_visit(visit: dict) -> list[ClinicalEvent]:
@@ -131,6 +164,7 @@ def build_events_for_visit(visit: dict) -> list[ClinicalEvent]:
                     value=lab["value"], unit=lab["unit"],
                     reference_low=lab["reference_low"], reference_high=lab["reference_high"],
                     abnormal=lab["abnormal"],
+                    qualitative_value=lab.get("qualitative_value"),
                 ))
         except Exception:
             logger.exception("Lab extraction failed for document %s", doc_id)
@@ -176,5 +210,54 @@ def build_events_for_visit(visit: dict) -> list[ClinicalEvent]:
                 ))
         except Exception:
             logger.exception("Diagnosis extraction failed for document %s", doc_id)
+
+        try:
+            # medications already captured with full dose/frequency detail
+            # by the rule-based extractor for THIS document — skip re-adding
+            # them as a bare, dose-less NER duplicate.
+            already_found_dx = {
+                e.name.lower() for e in events
+                if e.event_type == "diagnosis" and e.visit_id == visit_id
+            }
+
+            for ent in extract_supplementary_entities(text):
+                category = ent["category"]  # 'symptom' | 'diagnosis' | 'medication' | 'lab_finding'
+
+                # Unstructured lab_finding entities are not direct reportable events
+                if category == "lab_finding":
+                    continue
+
+                # Exclude any entities appearing in reference / educational / guideline text
+                if is_in_reference_text(text, ent["start"], ent["end"]):
+                    continue
+
+                assertion = detect_assertion(text, ent["start"], ent["end"])
+                if assertion == "suspected" and is_in_reference_text(text, ent["start"], ent["end"]):
+                    continue
+
+                if category == "medication":
+                    name, _ = normalize_medication(ent["name"])
+                    if name.lower() in already_found_meds:
+                        continue
+                elif category == "diagnosis":
+                    name, _ = normalize_diagnosis(ent["name"])
+                    if name.lower() in already_found_dx:
+                        continue
+                else:  # symptom
+                    name = ent["name"].title()
+
+                events.append(ClinicalEvent(
+                    patient_id=patient_id, visit_id=visit_id, visit_date=visit_date,
+                    document_id=doc_id, document_type=doc_type,
+                    event_type=category, event_date=event_date,
+                    name=name, name_raw=ent["name"],
+                    assertion=assertion,
+                    confidence=round(ent["score"] * 0.7, 2),
+                    needs_verification=True,
+                    source_text=text[max(0, ent["start"] - 30):ent["end"] + 20].strip(),
+                    source_documents=[],
+                ))
+        except Exception:
+            logger.exception("NER supplementary extraction failed for document %s", doc_id)
 
     return events

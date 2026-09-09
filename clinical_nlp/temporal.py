@@ -1,9 +1,4 @@
 """
-Temporal expression extraction. In the clinical documents this pipeline
-processes, the reliable date anchor is almost always the visit_date from
-the `visit` table. This module additionally looks for explicit dates
-mentioned in the free text (e.g. "as of 12/06/2026") so an event can
-carry a more specific event_date when the document states one.
 """
 from __future__ import annotations
 import re

@@ -9,23 +9,34 @@ from collections import defaultdict
 def analyze_lab_trends(timeline: dict) -> dict:
     """
     For each normalized lab test name, computes first/last/min/max,
-    absolute + percentage change, direction, count, abnormal count, and
-    first/latest measurement dates.
-
-    Returns: {lab_name: {...trend stats...}}
+    absolute + percentage change, direction ('gain' | 'drop' | 'stable' | 'single_visit'),
+    abnormal counts, units, and reference intervals.
+    Handles both quantitative and qualitative tests.
     """
-    series = defaultdict(list)  # name -> [(date, value, abnormal), ...]
+    series = defaultdict(list)       # name -> [(date, numeric_value, abnormal), ...]
+    qual_series = defaultdict(list)  # name -> [(date, qual_value, abnormal), ...]
+    units = {}
+    ref_ranges = {}
 
     for visit in timeline["visits"]:
         for lab in visit["laboratory"]:
-            if lab["value"] is None:
-                continue
             date = lab["event_date"] or visit["visit_date"]
-            series[lab["name"]].append((date, lab["value"], lab.get("abnormal")))
+            name = lab["name"]
+
+            if lab.get("unit") and name not in units:
+                units[name] = lab["unit"]
+            if (lab.get("reference_low") is not None or lab.get("reference_high") is not None) and name not in ref_ranges:
+                ref_ranges[name] = (lab.get("reference_low"), lab.get("reference_high"))
+
+            if lab.get("value") is not None:
+                series[name].append((date, lab["value"], lab.get("abnormal")))
+            elif lab.get("qualitative_value") is not None:
+                qual_series[name].append((date, lab["qualitative_value"], lab.get("abnormal")))
 
     trends = {}
+
+    # 1. Numeric series trends
     for name, points in series.items():
-        # sort by date; None dates go last and don't determine direction
         dated = [p for p in points if p[0]]
         dated.sort(key=lambda p: p[0])
         if not dated:
@@ -36,14 +47,23 @@ def analyze_lab_trends(timeline: dict) -> dict:
         abs_change = round(last_val - first_val, 4)
         pct_change = round((abs_change / first_val) * 100, 2) if first_val else None
 
+        unit_str = units.get(name, "")
         if len(dated) < 2:
-            direction = "insufficient_data"
+            direction = "single_visit"
+            trend_summary = "Single documented reading"
         elif abs_change > 0:
-            direction = "increasing"
+            direction = "gain"
+            pct_str = f" (+{pct_change}%)" if pct_change is not None else ""
+            trend_summary = f"gain of +{abs_change} {unit_str}{pct_str}"
         elif abs_change < 0:
-            direction = "decreasing"
+            direction = "drop"
+            pct_str = f" ({pct_change}%)" if pct_change is not None else ""
+            trend_summary = f"drop of -{abs(abs_change)} {unit_str}{pct_str}"
         else:
             direction = "stable"
+            trend_summary = "stable (no change)"
+
+        r_low, r_high = ref_ranges.get(name, (None, None))
 
         trends[name] = {
             "first_value": first_val,
@@ -55,12 +75,50 @@ def analyze_lab_trends(timeline: dict) -> dict:
             "absolute_change": abs_change,
             "percentage_change": pct_change,
             "direction": direction,
+            "trend_summary": trend_summary,
+            "unit": unit_str,
+            "ref_low": r_low,
+            "ref_high": r_high,
             "num_measurements": len(dated),
             "num_abnormal": sum(1 for p in dated if p[2]),
             "all_points": [{"date": d, "value": v, "abnormal": a} for d, v, a in dated],
         }
 
+    # 2. Qualitative series (e.g. Urine routine findings: ABSENT, CLEAR, 0-1 /HPF)
+    for name, q_points in qual_series.items():
+        if name in trends:
+            continue  # prefer numeric if both exist
+        dated_q = [p for p in q_points if p[0]]
+        dated_q.sort(key=lambda p: p[0])
+        if not dated_q:
+            continue
+
+        first_q = dated_q[0][1]
+        latest_q = dated_q[-1][1]
+        r_low, r_high = ref_ranges.get(name, (None, None))
+        unit_str = units.get(name, "")
+
+        trends[name] = {
+            "first_value": first_q,
+            "first_date": dated_q[0][0],
+            "latest_value": latest_q,
+            "latest_date": dated_q[-1][0],
+            "min_value": None,
+            "max_value": None,
+            "absolute_change": None,
+            "percentage_change": None,
+            "direction": "qualitative_observation",
+            "trend_summary": f"Observed: {latest_q}",
+            "unit": unit_str,
+            "ref_low": r_low,
+            "ref_high": r_high,
+            "num_measurements": len(dated_q),
+            "num_abnormal": sum(1 for p in dated_q if p[2]),
+            "all_points": [{"date": d, "value": v, "abnormal": a} for d, v, a in dated_q],
+        }
+
     return trends
+
 
 
 def analyze_medication_longitudinal(timeline: dict) -> dict:

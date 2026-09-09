@@ -17,8 +17,7 @@ from timeline.trends import (
     analyze_medication_longitudinal,
     analyze_diagnosis_longitudinal,
 )
-from longitudinal.conflicts import detect_medication_uncertainty
-
+from longitudinal.conflicts import detect_medication_uncertainty, detect_all_uncertain_findings
 logger = logging.getLogger(__name__)
 
 
@@ -47,7 +46,7 @@ def run_longitudinal_analysis(patient_visits: list[dict]) -> dict:
         return {
             "patient_id": None, "observation_period": None, "timeline": {"visits": []},
             "lab_trends": {}, "medication_longitudinal": {}, "diagnosis_longitudinal": {},
-            "medication_uncertainty": [], "total_events_extracted": 0,
+            "medication_uncertainty": [],"uncertain_findings": {"medication": [], "diagnosis": [], "symptom": []}, "total_events_extracted": 0,
             "total_events_after_dedup": 0,
         }
 
@@ -75,6 +74,7 @@ def run_longitudinal_analysis(patient_visits: list[dict]) -> dict:
         "medication_longitudinal": analyze_medication_longitudinal(timeline),
         "diagnosis_longitudinal": analyze_diagnosis_longitudinal(timeline),
         "medication_uncertainty": detect_medication_uncertainty(timeline),
+        "uncertain_findings": detect_all_uncertain_findings(timeline),
         "total_events_extracted": total_extracted,
         "total_events_after_dedup": len(deduped),
     }

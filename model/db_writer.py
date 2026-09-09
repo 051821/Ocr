@@ -103,7 +103,7 @@ def split_text_lines(text_lines):
         'date tested', 'date reported', 'date collected', 'hospital reg', 'registration no',
         'reg no', 'reg. no', 'episode id', 'nikshay', 'establishment id', 'laboratory name', 'lab name',
         'signature', 'signed by', 'other contact', 'occupation', 'prescription id', 'prescription no',
-        'uhid', 'patient id', 'token no', 'bill no', 'receipt no','patient id', 'REF BY DOCTOR : DR'
+        'uhid', 'patient id', 'token no', 'bill no', 'receipt no','patient id', 'REF BY DOCTOR : DR','name'
     ]
 
     standalone_keywords = [

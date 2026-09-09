@@ -11,13 +11,13 @@ from clinical_nlp.events import ClinicalEvent
 
 
 def _dedup_key(e: ClinicalEvent):
-    # value is rounded to avoid float-precision false negatives (e.g.
-    # 1.250000001 vs 1.25 from different OCR passes)
-    value_key = round(e.value, 3) if e.value is not None else None
+    # value is rounded to avoid float-precision false negatives
+    value_key = round(e.value, 3) if e.value is not None else (e.qualitative_value or None)
     return (
         e.patient_id, e.visit_id, e.event_date, e.event_type,
         e.name, value_key, e.unit,
     )
+
 
 
 def deduplicate_events(events: list[ClinicalEvent]) -> list[ClinicalEvent]:

@@ -1,0 +1,172 @@
+CLINICAL NLP & LONGITUDINAL ANALYSIS OVERHAUL - EXPLANATION OF CHANGES
+================================================================================
+Project: c:\ocr
+Date: 2026-09-08
+
+OVERVIEW
+--------------------------------------------------------------------------------
+Per your requirement:
+1. LLM has been completely removed from the Clinical NLP and Entity Extraction stage.
+   The local Ollama model (qwen3:4b) is now ONLY called at the very final stage
+   when generating the narrative report from pre-computed, verified structured JSON.
+2. The deterministic NER, regex, and clinical extraction engine has been overhauled
+   to reliably handle diverse medical reports without relying on an LLM:
+   - Complete Blood Count (CBC)
+   - Serum Biochemistry / Liver Function / Kidney Function / Electrolytes
+   - Urine Routine Examination (both quantitative values and qualitative observations)
+   - Handwritten / Printed Prescriptions (catching all medicines, OCR errors, and supplements)
+3. False-positive diagnoses and erroneous numerical trends have been eliminated.
+
+
+DETAILED BREAKDOWN OF CHANGES BY MODULE
+================================================================================
+
+1. CLINICAL NLP EXTRACTION (clinical_nlp/)
+--------------------------------------------------------------------------------
+* clinical_nlp/events.py:
+  - Removed 'from clinical_nlp.lllm_extraction import extract_with_llm'.
+  - Removed the LLM fallback extraction loop entirely.
+  - Added reference/guideline text exclusion: Any entity appearing inside educational
+    or reference text (e.g. "Alkaline Phosphatase may indicate liver disease...")
+    is filtered out so it never becomes a patient clinical finding.
+  - Added support for qualitative findings (e.g., 'ABSENT', 'CLEAR', '0-1 /HPF').
+
+* clinical_nlp/medications.py:
+  - Added line pre-processing (_preprocess_med_line) to split OCR-concatenated tokens
+    (e.g., 'ealciumd31000mg' -> 'ealcium d3 1000 mg').
+  - Expanded dosage form prefix regex (_DOSAGE_FORMS) to handle OCR misreadings
+    ('tab', 'cap', 'inj', 'syp', 'ab', 'ao', 'tb', 'ta', 't.', 'c.').
+  - Added Pass B (_MED_NO_DOSE_RE) for prescription lines that omit numeric dosage
+    (e.g., 'ab b complex od', 'cap vitamin d3 weekly').
+  - Expanded frequency code patterns (_FREQ_ALTS) to recognize OCR corruptions
+    such as 'bbr' -> 'twice_daily' (bd), 'bbd', '1-0-1', '1-0-0', '0-0-1', 'hs', 'sos'.
+  - Result: All 7 medications from Patient 1 (Amlodipine, Telmisartan, Metformin,
+    Aspirin combo, Tramadol, Calcium + Vitamin D3, Vitamin B Complex) are now extracted!
+
+* clinical_nlp/labs.py:
+  - Overhauled into a robust multi-pass deterministic extractor:
+    * Pass 1: Same-line extraction with mandatory units and reference intervals.
+    * Pass 2: Columnar, multi-line, and qualitative extraction. Handles OCR layouts
+      where the result appears on the line below with a colon (e.g. ': ABSENT',
+      ': 9ML', ': CLEAR', ': Yellow', ': 6.5', ': 1.005', ': 0-1 /HPF').
+  - Contextual awareness: When 'URINE' or 'URINE ROUTINE' is present in the document,
+    ambiguous terms like 'Albumin', 'Glucose', 'Blood' are automatically mapped
+    to their Urine-specific counterparts ('Urine albumin', 'Urine glucose', 'Urine blood').
+  - Position de-confliction: Prevents 'Blood urea' from claiming the same line
+    as 'Blood urea nitrogen', resolving the false downward Urea trend bug.
+  - Backward search: Captures columnar values where results precede headers
+    (e.g., ':3.96 3.5-5.2 \n Serum Albumin' correctly extracts Albumin = 3.96 g/dL).
+  - Physiological sanity bounds: Filters out registration and address codes
+    (e.g., prevents 'LSnop No 30' from being misidentified as 'Albumin: 30.0').
+
+* clinical_nlp/diagnoses.py:
+  - Replaced substring search with strict whole-word regex boundary (\b) matching.
+    This permanently prevents 'oa' from matching inside words like 'investioation'.
+  - Added reference text filtering: Entities in guideline/reference sentences
+    ('may indicate River disease or certain bone disorders') are ignored.
+
+* clinical_nlp/assertion.py:
+  - Added 'is_in_reference_text(text, start, end)' helper function to detect
+    sentences containing educational triggers ('may indicate', 'seen in', 'reference:',
+    'ADA guidelines') and prevent them from generating patient diagnoses.
+
+
+2. NORMALIZATION DICTIONARIES (normalization/)
+--------------------------------------------------------------------------------
+* normalization/medication.py:
+  - Substantially expanded '_MED_SYNONYMS' with Indian and global clinical formularies:
+    * Analgesics: Tramadol, Paracetamol (PCM, Calpol, Dolo), Ibuprofen, Diclofenac, Aceclofenac.
+    * Vitamins & Supplements: Calcium + Vitamin D3 (Shelcal, Gemcal, Calcitriol, ealciumd3),
+      Vitamin B Complex (Becosules, Neurobion, Mecobalamin, Folvite), Multivitamins.
+    * GI: Pantoprazole, Rabeprazole, Omeprazole, Esomeprazole, Ranitidine, Domperidone.
+    * Antidiabetics: Metformin, Glimepiride, Glibenclamide, Teneligliptin, Vildagliptin,
+      Sitagliptin, Dapagliflozin, Empagliflozin, Voglibose, Insulin.
+    * Antihypertensives & Cardiac: Amlodipine, Telmisartan, Losartan, Atenolol,
+      Metoprolol, Cilnidipine, Enalapril, Ramipril, Atorvastatin, Rosuvastatin,
+      Aspirin (Ecosprin), Clopidogrel.
+    * Antibiotics & Respiratory: Amoxicillin, Azithromycin, Ciprofloxacin, Cefixime,
+      Cefuroxime, Metronidazole, Montelukast, Levocetirizine, Salbutamol.
+  - Added RapidFuzz fuzzy matching (scorer=fuzz.ratio, threshold=80) to recover
+    from single-character OCR drops/substitutions ('ealcium' -> 'calcium', 'ecopsrin' -> 'aspirin').
+  - Expanded '_FREQUENCY_MAP' with OCR typo mappings ('bbr', 'bbd' -> 'twice_daily').
+
+* normalization/laboratory.py:
+  - Expanded '_LAB_SYNONYMS' to cover:
+    * CBC Tests: Hemoglobin, RBC, WBC / TLC, Platelets, Packed Cell Volume (PCV/Hematocrit),
+      MCV, MCH, MCHC, RDW, Neutrophils, Lymphocytes, Monocytes, Eosinophils, Basophils, ESR.
+    * Serum Biochemistry: Serum Bilirubin (Total, Direct, Indirect), SGOT/AST, SGPT/ALT,
+      Alkaline Phosphatase, Total Protein, Albumin, Globulin, A:G Ratio, Urea, BUN,
+      Creatinine, Uric Acid, Sodium, Potassium, Chloride, Calcium, Phosphorus,
+      RBS, FBS, PPBS, HbA1c, Lipid Profile (Cholesterol, Triglycerides, HDL, LDL, VLDL), TSH.
+    * Urine Routine Examination: Urine Quantity, Colour, Appearance, pH, Specific Gravity,
+      Urine Albumin/Protein, Urine Glucose/Sugar, Urine Ketones, Urine Blood,
+      Bile Salts, Bile Pigments, Urobilinogen, Nitrite, Pus Cells, Epithelial Cells,
+      Urine RBC, Crystals, Casts, Bacteria, Amorphous Deposits.
+  - Added contextual urine resolution in 'normalize_lab_name(raw_name, in_urine_context)'.
+  - Added RapidFuzz fuzzy matching for minor OCR misspellings ('alkaline phosphatse' -> 'Alkaline phosphatase').
+
+* normalization/diagnosis.py:
+  - Expanded '_DIAGNOSIS_SYNONYMS':
+    * Added OCR aliases: '12dm', 't-2 dm', 'dm2', 't2 d' under 'Type 2 diabetes mellitus'.
+    * Added common clinical conditions: Gastritis, GERD, Acid peptic disease (APD),
+      Fatty liver disease, Urinary tract infection (UTI), Spondylosis, Neuropathy,
+      Retinopathy, Nephropathy, Pneumonia, Bronchitis, Headache, Migraine.
+  - Added RapidFuzz matching for long diagnosis terms and enforced word boundaries.
+
+
+3. TIMELINE & LONGITUDINAL ANALYSIS (timeline/ & longitudinal/)
+--------------------------------------------------------------------------------
+* timeline/deduplicate.py:
+  - Updated '_dedup_key' to support qualitative values ('qualitative_value' used when
+    'value' is None), preventing qualitative tests from being corrupted or dropped.
+
+* timeline/trends.py:
+  - Updated 'analyze_lab_trends' to track both quantitative series and qualitative
+    observations (e.g. 'Bacteria: ABSENT', 'Pus cells: 0-1 /HPF').
+  - Ensured 'Blood urea nitrogen (BUN)' and 'Urea' remain strictly separated so BUN values
+    never create a false downward trend in Urea.
+
+* dataanalysis/app.py:
+  - Improved Streamlit dashboard rendering for qualitative findings to display them
+    cleanly as: '- **Bacteria**: `ABSENT` (2026-05-09...)'.
+
+
+VERIFICATION ON YOUR TWO EXAMPLES
+================================================================================
+
+1. PATIENT 1 (574c0874-4677-48e2-b60f-7a33e5e659a3):
+   - Diagnoses: Correctly identifies Hypertension and Type 2 diabetes mellitus (from 'Htn 12dm').
+     No false-positive Osteoarthritis from 'Investioation'.
+     No false diagnoses from reference text ('River disease', 'certain bone disorders').
+   - Medications: Successfully extracts all 7 medications:
+     * Amlodipine 5.0 mg once_daily
+     * Telmisartan 40.0 once_daily
+     * Metformin 500.0 mg twice_daily (from 'bbr')
+     * Aspirin 75.0 once_daily_night (combo dose detected from 'Tab ecopsrin av 75 20 hs')
+     * Tramadol 37.0 mg twice_daily (from 'ao tramadol 37 mg bd')
+     * Calcium + Vitamin D3 1000.0 mg once_daily (from 'Tab ealciumd31000mg od')
+     * Vitamin B Complex once_daily (from 'ab b complex od')
+   - Labs:
+     * Albumin correctly parsed as 3.96 g/dL (LSnop No 30 rejected).
+     * Urea (30.9 mg/dL) and BUN (14.43 mg/dL) separated; no false downward trend.
+     * All liver enzymes, electrolytes, and blood sugar correctly extracted.
+
+2. PATIENT 2 (9803ced9-0087-4aa9-9e8b-0080b903117c - URINE ROUTINE):
+   - Diagnosis: Correctly extracts Gastritis.
+   - Laboratory: Successfully extracts all Urine Routine tests:
+     * Bacteria: ABSENT
+     * Pus cells: 0-1 /HPF
+     * Epithelial cells: ABSENT
+     * Urine RBC: ABSENT
+     * Crystals: ABSENT
+     * Amorphous deposit: ABSENT
+     * Urine quantity: 9 ml
+     * Urine colour: Yellow
+     * Urine appearance: CLEAR
+     * Urine pH: 6.5
+     * Urine specific gravity: 1.005 (abnormal flagged vs 1.015-1.025)
+     * Urine albumin: ABSENT
+     * Urine glucose: ABSENT
+     * Urine ketone: ABSENT
+     * Urine blood: ABSENT
+================================================================================

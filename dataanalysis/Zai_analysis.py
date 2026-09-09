@@ -1,11 +1,6 @@
 from ollama import chat
 from patient_timeline import create_patient_timeline
 
-
-from ollama import chat
-from patient_timeline import create_patient_timeline
-
-
 def build_longitudinal_analysis_prompt(patient_data):
     timeline = create_patient_timeline(patient_data)
 

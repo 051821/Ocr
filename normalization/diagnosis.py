@@ -12,7 +12,10 @@ from rapidfuzz import process, fuzz
 
 # key: normalized form (canonical) -> list of raw surface forms / abbreviations
 _DIAGNOSIS_SYNONYMS = {
-    "Hypertension": ["htn", "hypertension", "high blood pressure", "essential hypertension"],
+    "Hypertension": [
+        "htn", "hitn", "h1tn", "hypertension", "high blood pressure",
+        "essential hypertension",
+    ],
     "Type 2 diabetes mellitus": [
         "t2dm", "12dm", "type 2 dm", "type-2 dm", "type ii diabetes", "type 2 diabetes",
         "diabetes mellitus type 2", "niddm", "dm2", "dm 2", "dm-2", "t2 d",
@@ -38,7 +41,6 @@ _DIAGNOSIS_SYNONYMS = {
     "Nephropathy": ["nephropathy", "diabetic nephropathy"],
     "Pneumonia": ["pneumonia", "bronchopneumonia"],
     "Bronchitis": ["bronchitis", "acute bronchitis"],
-    "Headache": ["headache", "migraine"],
 }
 
 # Build a fast reverse lookup: normalized surface form -> canonical name

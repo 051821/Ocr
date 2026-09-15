@@ -4,8 +4,10 @@ Fetches medical documents from the PostgreSQL patientdocument table (Supabase st
 Constructs a manifest without downloading images to local disk.
 """
 import os
+import re
 import sys
 from urllib.parse import unquote, urlparse
+import boto3
 
 # Ensure project root is in sys.path when running as a standalone script
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -22,6 +24,39 @@ if not config.DATABASE_URL:
 
 ENGINE = create_engine(config.DATABASE_URL, pool_pre_ping=True)
 IMAGE_EXTENSIONS = config.IMAGE_EXTENSIONS
+
+# --- S3 support -------------------------------------------------------
+# Authenticated client for private S3 objects (e.g. testdigiaarogyasaarathifiles).
+# Credentials come from config.py / .env, or from an IAM role if those are None.
+S3_CLIENT = boto3.client(
+    "s3",
+    aws_access_key_id=getattr(config, "AWS_ACCESS_KEY_ID", None),
+    aws_secret_access_key=getattr(config, "AWS_SECRET_ACCESS_KEY", None),
+    region_name=getattr(config, "AWS_REGION", None),
+)
+
+# Matches virtual-hosted-style (bucket.s3.region.amazonaws.com/key)
+# and path-style (s3.region.amazonaws.com/bucket/key) S3 URLs.
+_S3_URL_RE = re.compile(
+    r"^https?://(?:(?P<bucket1>[^.]+)\.s3[.-][\w-]*\.amazonaws\.com/(?P<key1>.+)"
+    r"|s3[.-][\w-]*\.amazonaws\.com/(?P<bucket2>[^/]+)/(?P<key2>.+))$"
+)
+
+
+def _parse_s3_url(file_url):
+    """Return (bucket, key) if file_url is an S3 URL, else None."""
+    if file_url.startswith("s3://"):
+        without_scheme = file_url[len("s3://"):]
+        bucket, _, key = without_scheme.partition("/")
+        return bucket, unquote(key)
+
+    m = _S3_URL_RE.match(file_url)
+    if not m:
+        return None
+    bucket = m.group("bucket1") or m.group("bucket2")
+    key = m.group("key1") or m.group("key2")
+    return bucket, unquote(key)
+# ------------------------------------------------------------------------
 
 
 def item_key(item):
@@ -44,14 +79,19 @@ def load_skip_keys():
 
 
 def _list_database_images():
-    """Query image documents from patientdocument table."""
+    """Query image documents for patients whose last name is OCR."""
     query = text(r"""
-        SELECT file_path, patient_id, visit_id
-        FROM "patientdocument"
-        WHERE file_path LIKE 'https://%.supabase.co/storage/v1/object/public/%'
-          AND file_path ~* '\.(jpg|jpeg|png|webp|gif)$'
-          AND visit_id IS NOT NULL
-        ORDER BY file_path
+        SELECT
+            pd.file_path,
+            pd.patient_id,
+            pd.visit_id
+        FROM "patientdocument" pd
+        JOIN "patient" p
+            ON p.id = pd.patient_id
+        WHERE pd.file_path ~* '\.(jpg|jpeg|png|webp|gif)$'
+          AND pd.visit_id IS NOT NULL
+          AND p.full_name ~* '(^|[[:space:]])ocr$'
+        ORDER BY pd.file_path
     """)
 
     with ENGINE.connect() as conn:
@@ -59,7 +99,20 @@ def _list_database_images():
 
 
 def download_image_bytes(file_url):
-    """Fetch image bytes in memory via HTTP GET. No file is saved locally to disk."""
+    """Fetch image bytes in memory. Uses an authenticated S3 GET for private
+    S3 URLs, and a plain HTTP GET for everything else (e.g. public Supabase
+    URLs). No file is saved locally to disk either way."""
+    s3_target = _parse_s3_url(file_url)
+
+    if s3_target:
+        bucket, key = s3_target
+        try:
+            obj = S3_CLIENT.get_object(Bucket=bucket, Key=key)
+            return obj["Body"].read()
+        except Exception as e:
+            print(f"[s3] error downloading s3://{bucket}/{key}: {e}")
+            raise
+
     resp = requests.get(file_url, timeout=60)
     if resp.status_code != 200:
         print(f"[database] HTTP {resp.status_code} downloading {file_url}: {resp.text[:300]!r}")

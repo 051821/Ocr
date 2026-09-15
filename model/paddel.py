@@ -4,8 +4,8 @@ model/paddel.py
 import gc
 import json
 import os
+import re
 
-import paddle
 from rapidfuzz import process, fuzz
 
 import config
@@ -32,13 +32,13 @@ def run_ocr_batch(model, img_arrays):
 
 
 def ensemble_batch(en_batch_results, server_batch_results):
-    """Same detected box (rounded to the nearest 10px) -> keep the higher
+    """Same detected box (rounded to the nearest 5px) -> keep the higher
     confidence recognition between the two engines."""
     merged_batch = []
     for en_results, server_results in zip(en_batch_results, server_batch_results):
         merged = {}
         for box, text, score in en_results + server_results:
-            key = tuple(round(v / 10) * 10 for v in box)
+            key = tuple(round(v / 5) * 5 for v in box)
             if key not in merged or score > merged[key][2]:
                 merged[key] = (box, text, score)
         merged_batch.append(merged)
@@ -48,56 +48,75 @@ def ensemble_batch(en_batch_results, server_batch_results):
 # ---------------------------------------------------------------------------
 # READING ORDER
 # ---------------------------------------------------------------------------
-def get_center(box):
+def get_box_geometry(box):
     x_coords = box[0::2]
     y_coords = box[1::2]
-    return sum(x_coords) / len(x_coords), sum(y_coords) / len(y_coords)
-
-
-def cluster_into_columns(items, gap_threshold=config.COLUMN_GAP_THRESHOLD):
-    items = sorted(items, key=lambda i: i["x"])
-    columns, current_col, prev_x = [], [], None
-    for item in items:
-        if prev_x is not None and (item["x"] - prev_x) > gap_threshold:
-            columns.append(current_col)
-            current_col = []
-        current_col.append(item)
-        prev_x = item["x"]
-    if current_col:
-        columns.append(current_col)
-    return columns
-
-
-def sort_column_top_to_bottom(column, row_tolerance=config.ROW_TOLERANCE):
-    column = sorted(column, key=lambda i: i["y"])
-    rows, current_row, current_y = [], [], None
-    for item in column:
-        if current_y is None or abs(item["y"] - current_y) <= row_tolerance:
-            current_row.append(item)
-            current_y = item["y"] if current_y is None else current_y
-        else:
-            current_row.sort(key=lambda i: i["x"])
-            rows.append(current_row)
-            current_row = [item]
-            current_y = item["y"]
-    if current_row:
-        current_row.sort(key=lambda i: i["x"])
-        rows.append(current_row)
-    ordered = []
-    for row in rows:
-        ordered.extend(row)
-    return ordered
+    min_x, max_x = min(x_coords), max(x_coords)
+    min_y, max_y = min(y_coords), max(y_coords)
+    cx = (min_x + max_x) / 2.0
+    cy = (min_y + max_y) / 2.0
+    height = max(max_y - min_y, 1.0)
+    return cx, cy, min_x, height
 
 
 def sort_reading_order(merged):
+    """
+    Sorts OCR text boxes in natural reading order:
+    1. Group items into horizontal rows using the running row midpoint Y.
+       Using the midpoint (rather than a fixed anchor) prevents multi-word boxes
+       whose center-Ys differ by a few pixels from being split across rows.
+    2. Sort rows top-to-bottom by midpoint Y.
+    3. Within each row, sort items left-to-right by min_x.
+    """
     items = []
     for box, text, score in merged.values():
-        x, y = get_center(box)
-        items.append({"x": x, "y": y, "text": text, "score": score})
-    columns = cluster_into_columns(items)
+        cx, cy, min_x, height = get_box_geometry(box)
+        items.append({
+            "x": cx,
+            "y": cy,
+            "min_x": min_x,
+            "height": height,
+            "text": text,
+            "score": score
+        })
+
+    # Sort all items top-to-bottom by Y coordinate
+    items = sorted(items, key=lambda i: i["y"])
+
+    rows = []
+    row_mid_ys = []  # running midpoint Y for each row
+    row_tolerance = config.ROW_TOLERANCE
+
+    for item in items:
+        matched_row = None
+        for idx, row in enumerate(rows):
+            # Compare against the running row midpoint Y to tolerate slight per-glyph Y variance.
+            # Use 60% of the text height as tolerance (≈12px for 20px-tall text),
+            # still bounded by ROW_TOLERANCE (15) to prevent snowballing across actual rows.
+            mid_y = row_mid_ys[idx]
+            ref_h = row[0]["height"]
+            tol = max(6.0, min(row_tolerance, ref_h * 0.6))
+            if abs(item["y"] - mid_y) <= tol:
+                matched_row = row
+                # Update the running midpoint Y incrementally
+                row_mid_ys[idx] = (mid_y * len(row) + item["y"]) / (len(row) + 1)
+                break
+        if matched_row is not None:
+            matched_row.append(item)
+        else:
+            rows.append([item])
+            row_mid_ys.append(item["y"])
+
+    # Sort rows top-to-bottom by their midpoint Y
+    paired = sorted(zip(row_mid_ys, rows), key=lambda p: p[0])
+    rows = [r for _, r in paired]
+
+    # Sort items within each row left-to-right by min_x / x
     ordered = []
-    for col in columns:
-        ordered.extend(sort_column_top_to_bottom(col))
+    for row in rows:
+        row.sort(key=lambda i: i["min_x"])
+        ordered.extend(row)
+
     return ordered
 
 
@@ -106,6 +125,9 @@ def sort_reading_order(merged):
 # ---------------------------------------------------------------------------
 def correct_against_vocab(text, score, conf_gate=0.85, threshold=config.PADDLE_VOCAB_MATCH_THRESHOLD):
     if score >= conf_gate or not text.strip():
+        return text
+    # Only correct against vocab for words >= 4 chars to prevent short strings from distorting
+    if len(text.strip()) < 4:
         return text
     match, match_score, _ = process.extractOne(text, config.LAB_VOCAB, scorer=fuzz.ratio)
     return match if match_score >= threshold else text
@@ -124,11 +146,20 @@ def finalize_entries(merged):
     final = []
     for item in ordered:
         text, score = item["text"], item["score"]
-        if not text.strip():
+        stripped = text.strip()
+        if not stripped:
+            continue
+        # Filter phantom tokens that are purely punctuation/symbols (e.g. bare '.' from bullet chars)
+        if re.fullmatch(r"[^A-Za-z0-9%]+", stripped):
+            continue
+        # Filter the '00' artifact: the '. %' dot printed before '%' in differential-count rows
+        # is mis-recognized as '00' by one engine. Reject short all-digit tokens that cannot
+        # plausibly stand alone as a clinical value (i.e. exactly "00" or "0" at low confidence).
+        if stripped in ("00",) and score < 0.75:
             continue
         min_score = (
             config.PADDLE_LONG_TEXT_CONFIDENCE_THRESHOLD
-            if len(text.strip()) >= config.PADDLE_LONG_TEXT_MIN_CHARS
+            if len(stripped) >= config.PADDLE_LONG_TEXT_MIN_CHARS
             else config.PADDLE_CONFIDENCE_THRESHOLD
         )
         if score < min_score:
@@ -196,6 +227,7 @@ def run_printed_ocr(printed_items):
 
         processed_since_save += len(valid_items)
         if processed_since_save >= config.PADDLE_SAVE_EVERY:
+            import paddle
             paddle.device.cuda.empty_cache()
             gc.collect()
             processed_since_save = 0

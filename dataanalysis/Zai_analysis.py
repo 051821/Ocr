@@ -1,5 +1,8 @@
 from ollama import chat
 from patient_timeline import create_patient_timeline
+from longitudinal.adapters import adapt_from_simple_history
+from longitudinal.longitudinal import run_longitudinal_analysis
+from longitudinal.report_generator import generate_longitudinal_report
 
 def build_longitudinal_analysis_prompt(patient_data):
     timeline = create_patient_timeline(patient_data)
@@ -26,6 +29,8 @@ Return your response using these sections:
 
 ## Chronological Timeline
 
+## Laboratory Results & Trends
+
 ## Changes Over Time
 
 ## Recurring Issues
@@ -42,6 +47,15 @@ PATIENT HISTORY:
 
 
 def analyze_patient_with_ai(patient_data):
+    # Prefer the structured longitudinal clinical NLP engine with verified lab trends
+    try:
+        visits = adapt_from_simple_history(patient_data)
+        analysis_payload = run_longitudinal_analysis(visits)
+        return generate_longitudinal_report(analysis_payload)
+    except Exception:
+        pass
+
+    # Fallback to direct prompt if structured pipeline unavailable
     try:
         prompt = build_longitudinal_analysis_prompt(patient_data)
 
@@ -55,4 +69,4 @@ def analyze_patient_with_ai(patient_data):
         return response.message.content
 
     except Exception as e:
-        raise RuntimeError(f"AI analysis failed: {type(e).__name__}: {str(e)}")
+        raise RuntimeError(f"AI analysis failed: {type(e).__name__}: {str(e)}")

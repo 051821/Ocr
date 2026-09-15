@@ -17,7 +17,8 @@ SYMPTOM_VOCAB = [
     "abdominal pain", "back pain", "neck pain", "knee pain",
     "joint pain", "fatigue", "weakness", "swelling", "numbness",
     "tingling", "blurred vision", "palpitations", "weight loss",
-    "weight gain", "loss of appetite",
+    "weight gain", "loss of appetite", "migraine", "insomnia",
+    "shoulder pain", "upper abdomen pain",
 ]
 
 

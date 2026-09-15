@@ -11,7 +11,9 @@ _MED_SYNONYMS = {
     "Telmisartan": ["telmisartan", "telma", "telmikem", "telpres", "telvas"],
     "Metformin": ["metformin", "glycomet", "glucophage", "gluconorm"],
     "Atorvastatin": ["atorvastatin", "atorva", "storvas", "atocor"],
-    "Aspirin": ["aspirin", "ecosprin", "ecopsrin", "asa", "aspirin ec"],
+    "Aspirin": ["aspirin", "asa", "aspirin ec"],
+    "Ecosprin AV": ["ecosprin av", "ecopsrin av", "ecosprin-av", "ecopsrin-av", "ecospirin av"],
+    "Ecosprin": ["ecosprin", "ecopsrin", "ecospirin"],
     "Clopidogrel": ["clopidogrel", "clopilet", "deplatt"],
     "Losartan": ["losartan", "losar", "repace"],
     "Glimepiride": ["glimepiride", "amaryl", "zoryl"],
@@ -37,9 +39,15 @@ _MED_SYNONYMS = {
     ],
     "Vitamin B Complex": [
         "b complex", "b-complex", "vitamin b complex", "vitamin b", "becosules",
-        "neurobion", "neurobion forte", "mecobalamin", "methylcobalamin",
-        "folvite", "folic acid", "supradyn", "multivitamin", "multivitamins",
+        "neurobion", "neurobion forte", "folvite", "folic acid", "supradyn",
+        "multivitamin", "multivitamins",
     ],
+    "Methylcobalamin": [
+        "methylcobalamin", "methocobalamin", "methocobalmin", "mecobalamin",
+        "methycobal", "methyl coblamin",
+    ],
+    "Nexito Plus": ["nexito plus", "nexito-plus"],
+    "Nexito": ["nexito", "escitalopram"],
     # Cardiovascular
     "Atenolol": ["atenolol", "betacard", "aten"],
     "Metoprolol": ["metoprolol", "betaloc", "metolar"],
@@ -76,17 +84,32 @@ for canonical, synonyms in _MED_SYNONYMS.items():
     for s in synonyms:
         _REVERSE[s.strip().lower()] = canonical
 
+# Surface forms sorted longest-first. Used below so the word-boundary search
+# matches the most specific synonym instead of stopping at whatever dict
+# order happens to hit first (a short synonym that's a substring hit for a
+# different, longer, more correct synonym present in the same text).
+_REVERSE_ITEMS_BY_LENGTH = sorted(_REVERSE.items(), key=lambda kv: -len(kv[0]))
+
+
 _FREQUENCY_MAP = {
     "od": "once_daily", "o.d": "once_daily", "o.d.": "once_daily", "od.": "once_daily",
     "1-0-0": "once_daily", "1 0 0": "once_daily", "od daily": "once_daily",
+    "daily": "once_daily", "once daily": "once_daily", "once a day": "once_daily",
+    "1 daily": "once_daily", "daily once": "once_daily",
     "hs": "once_daily_night", "h.s": "once_daily_night", "h.s.": "once_daily_night",
     "hs.": "once_daily_night", "0-0-1": "once_daily_night", "0 0 1": "once_daily_night",
+    "night": "once_daily_night", "at night": "once_daily_night", "bedtime": "once_daily_night",
+    "morning": "morning", "evening": "evening",
+    "after food": "after_food", "before food": "before_food", "with food": "with_food",
+    "empty stomach": "empty_stomach", "empty syomach": "empty_stomach",
     "bd": "twice_daily", "b.d": "twice_daily", "b.d.": "twice_daily", "bd.": "twice_daily",
     "b/d": "twice_daily", "1-0-1": "twice_daily", "1 0 1": "twice_daily", "bid": "twice_daily",
+    "twice daily": "twice_daily", "twice a day": "twice_daily", "2 times a day": "twice_daily",
     "bbr": "twice_daily", "bbd": "twice_daily",  # common OCR typos for bd
     "tds": "thrice_daily", "tid": "thrice_daily", "1-1-1": "thrice_daily", "1 1 1": "thrice_daily",
-    "t.d.s": "thrice_daily", "t.d.s.": "thrice_daily",
-    "qid": "four_times_daily", "1-1-1-1": "four_times_daily",
+    "t.d.s": "thrice_daily", "t.d.s.": "thrice_daily", "thrice daily": "thrice_daily",
+    "three times daily": "thrice_daily",
+    "qid": "four_times_daily", "1-1-1-1": "four_times_daily", "four times daily": "four_times_daily",
     "sos": "as_needed", "s.o.s": "as_needed", "s.o.s.": "as_needed", "prn": "as_needed",
     "stat": "immediately",
     "weekly": "weekly", "od weekly": "weekly", "once a week": "weekly",
@@ -103,9 +126,8 @@ def normalize_medication(raw_name: str) -> tuple[str | None, bool]:
 
     if cleaned in _REVERSE:
         return _REVERSE[cleaned], True
-
-    # Exact word-boundary search
-    for surface, canonical in _REVERSE.items():
+    
+    for surface, canonical in _REVERSE_ITEMS_BY_LENGTH:
         if surface and re.search(rf"\b{re.escape(surface)}\b", cleaned):
             return canonical, True
 
@@ -127,4 +149,3 @@ def normalize_frequency(raw_freq: str) -> str | None:
         return None
     key = raw_freq.strip().lower()
     return _FREQUENCY_MAP.get(key, key or None)
-

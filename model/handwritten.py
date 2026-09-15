@@ -25,10 +25,21 @@ from preprocessing.handwritten_preprocessing import encode_image_b64
 
 
 
-def text_to_lines(text):
+def text_to_lines(text, max_line_repetitions: int = 3):
     if text is None:
         return []
-    return [line for line in (l.strip() for l in text.splitlines()) if line]
+    lines = []
+    seen_counts = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        norm = line.lower()
+        seen_counts[norm] = seen_counts.get(norm, 0) + 1
+        if seen_counts[norm] > max_line_repetitions:
+            continue
+        lines.append(line)
+    return lines
 
 
 # ---------------------------------------------------------------------------

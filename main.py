@@ -191,7 +191,14 @@ def classify_image(img_bgr, clip_bundle):
         }
 
     handwritten_ratio = weighted_handwritten / document_weight
-    is_handwritten = handwritten_ratio >= config.HANDWRITTEN_TILE_RATIO
+    # A medical document is handwritten if the tile vote ratio clears the threshold,
+    # OR if the whole-page global classification leans handwritten (g_hw > g_pr)
+    # with measurable handwriting in tiles (>= 0.30). This ensures printed forms
+    # with handwritten clinical entries are routed to the handwritten pipeline.
+    is_handwritten = (
+        handwritten_ratio >= config.HANDWRITTEN_TILE_RATIO
+        or (g_hw > g_pr and handwritten_ratio >= 0.30)
+    )
     return is_handwritten, {
         "decision": "tile_vote", "handwritten_ratio": round(handwritten_ratio, 3),
         "non_blank_tiles": non_blank_tiles, "global_printed_prob": round(g_pr, 3),

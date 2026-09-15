@@ -21,8 +21,8 @@ import re
 from normalization.laboratory import normalize_lab_name, _LAB_SYNONYMS
 
 _UNIT_ALTS = (
-    r"mg/dl|g/dl|u/l|iu/l|mmol/l|meq/l|%|mmhg|ng/ml|miu/l|mcg/dl|/ul|"
-    r"/hpf|/lpf|cells/cumm|cumm|lakhs/cumm|fl|pg|sec|seconds|mm/hr|ml"
+    r"mg/dl|gm/dl|g/dl|u/l|iu/l|mmol/l|meq/l|%|mmhg|ng/ml|miu/l|mcg/dl|/ul|"
+    r"/hpf|/lpf|millions/cumm|million/cumm|lakhs/cumm|lakh/cumm|cells/cumm|cumm|fl|pg|sec|seconds|mm/hr|ml"
 )
 
 _QUAL_RESULTS = (
@@ -31,7 +31,7 @@ _QUAL_RESULTS = (
 )
 
 _LAB_LINE_RE = re.compile(
-    r"(?P<name>[A-Za-z][A-Za-z0-9 /()\-]{1,40}?)"
+    r"(?P<name>[A-Za-z][A-Za-z0-9 ,/()\-]{1,50}?)"
     r"(?:\s*[:=]\s*|\s+)"
     r"(?P<value>-?\d+(?:\.\d+)?)\s*"
     rf"(?P<unit>{_UNIT_ALTS})"
@@ -40,12 +40,13 @@ _LAB_LINE_RE = re.compile(
 )
 
 _REF_RANGE_RE = re.compile(
-    r"(?:ref(?:erence)?\.?:?\s*|bio\.?\s*ref\.?\s*interval\s*)?"
+    r"(?:ref(?:erence)?[,\.]?:?\s*|bio[,\.]?\s*ref[,\.]?\s*interval\s*)?"
     r"(?P<low>-?\d+(?:\.\d+)?)\s*[-to]{1,3}\s*(?P<high>-?\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
 
-_LT_REF_RE = re.compile(r"<\s*(?P<high>-?\d+(?:\.\d+)?)", re.IGNORECASE)
+_LT_REF_RE = re.compile(r"(?:ref(?:erence)?[,\.]?:?\s*|bio[,\.]?\s*ref[,\.]?\s*interval\s*)?<=?\s*(?P<high>-?\d+(?:\.\d+)?)", re.IGNORECASE)
+_GT_REF_RE = re.compile(r"(?:ref(?:erence)?[,\.]?:?\s*|bio[,\.]?\s*ref[,\.]?\s*interval\s*)?>=?\s*(?P<low>-?\d+(?:\.\d+)?)", re.IGNORECASE)
 
 _MED_CONTEXT_WORDS = {
     "tab", "cap", "inj", "syp", "syrup", "susp", "drops",
@@ -61,25 +62,131 @@ _NON_LAB_KEYWORDS = {
     "pin", "plot", "code", "reg", "phone", "mob", "registration",
 }
 
-# Physiological sanity limits for blood tests to reject non-clinical serial numbers
+# Physiological sanity limits for blood tests to reject row-shifted or non-clinical numbers
 _PHYSIOLOGICAL_LIMITS = {
+    # LFT
     "Albumin": (0.5, 8.0),
     "Total protein": (1.0, 15.0),
+    "Globulin": (0.5, 10.0),
     "Bilirubin total": (0.01, 40.0),
     "Bilirubin direct": (0.01, 30.0),
     "Bilirubin indirect": (0.01, 30.0),
-    "Creatinine": (0.1, 30.0),
-    "Urea": (2.0, 350.0),
-    "Blood urea nitrogen": (1.0, 150.0),
-    "Sodium": (80.0, 200.0),
-    "Potassium": (1.0, 12.0),
     "AST": (1.0, 5000.0),
     "ALT": (1.0, 5000.0),
     "Alkaline phosphatase": (5.0, 3000.0),
+    # KFT / Electrolytes
+    "Creatinine": (0.1, 30.0),
+    "Urea": (2.0, 350.0),
+    "Blood urea nitrogen": (1.0, 150.0),
+    "Uric acid": (0.5, 25.0),
+    "Sodium": (80.0, 200.0),
+    "Potassium": (1.0, 12.0),
+    "Calcium": (3.0, 20.0),
+    # CBC — crucial limits to prevent row-shifted values from mapping to wrong test
     "Hemoglobin": (1.0, 30.0),
+    "RBC": (1.0, 9.0),                  # millions/cumm — rejects 12.7 (Hb) being mapped to RBC
+    "Packed cell volume": (10.0, 70.0), # % — rejects 4.59 (RBC) being mapped to PCV
+    "MCV": (40.0, 140.0),               # fL
+    "MCH": (10.0, 50.0),                # pg
+    "MCHC": (15.0, 45.0),               # g/dL
+    "RDW": (8.0, 35.0),                 # %
+    "WBC": (500.0, 150000.0),           # cells/cumm
+    "Platelets": (0.2, 20.0),           # in lakhs/cumm (or 20k to 2M)
+    "ESR": (0.0, 150.0),                # mm/hr
+    # Glucose / Lipids
     "Random blood glucose": (10.0, 1200.0),
     "Fasting blood glucose": (10.0, 1000.0),
     "HbA1c": (2.0, 25.0),
+    "Total cholesterol": (30.0, 1000.0),
+    "Triglycerides": (20.0, 2500.0),
+    "HDL": (5.0, 150.0),
+    "LDL": (10.0, 500.0),
+    "TSH": (0.001, 150.0),
+    "PVC":(0.0, 100.0),
+}
+
+# Standard reference intervals to determine abnormality when unprinted in OCR report
+_DEFAULT_REFERENCE_INTERVALS = {
+    "RDW": (11.0, 16.0),
+    "Hemoglobin": (12.0, 16.0),
+    "RBC": (3.8, 5.5),
+    "Packed cell volume": (36.0, 50.0),
+    "MCV": (80.0, 100.0),
+    "MCH": (27.0, 32.0),
+    "MCHC": (31.5, 35.5),
+    "WBC": (4000.0, 11000.0),
+    "Platelets": (1.5, 4.5),
+    "Neutrophils": (40.0, 80.0),
+    "Lymphocytes": (20.0, 40.0),
+    "Monocytes": (2.0, 10.0),
+    "Eosinophils": (1.0, 6.0),
+    "Basophils": (0.0, 2.0),
+    "Epithelial cells": (0.0, 5.0),
+    "Creatinine": (0.6, 1.2),
+    "Urea": (10.0, 50.0),
+    "Blood urea nitrogen": (6.0, 20.0),
+    "Bilirubin total": (0.2, 1.2),
+    "Bilirubin direct": (0.0, 0.4),
+    "Bilirubin indirect": (0.2, 0.8),
+    "Total protein": (6.0, 8.3),
+    "Albumin": (3.5, 5.2),
+    "Globulin": (2.0, 3.5),
+    "AST": (0.0, 45.0),
+    "ALT": (0.0, 45.0),
+    "Alkaline phosphatase": (40.0, 140.0),
+    "Random blood glucose": (70.0, 140.0),
+    "Fasting blood glucose": (70.0, 100.0),
+    "HbA1c": (4.0, 5.7),
+    "Sodium": (135.0, 145.0),
+    "Potassium": (3.5, 5.1),
+    "HDL": (40.0, 88.0),
+    "LDL": (0.0, 100.0),
+    "Total cholesterol": (125.0, 200.0),
+    "Triglycerides": (50.0, 150.0),
+    "Calcium": (8.5, 10.5),
+    "Uric acid": (3.5, 7.2),
+}
+
+# Permitted clinical units per test to reject units mistakenly copied from neighboring rows/columns
+_EXPECTED_UNITS = {
+    "Albumin": {"g/dl", "gm/dl", "g/l"},
+    "Total protein": {"g/dl", "gm/dl", "g/l"},
+    "Globulin": {"g/dl", "gm/dl", "g/l"},
+    "Hemoglobin": {"g/dl", "gm/dl", "g/l"},
+    "RBC": {"millions/cumm", "million/cumm", "/cumm", "cumm"},
+    "WBC": {"cells/cumm", "/cumm", "cumm", "/ul"},
+    "Platelets": {"lakhs/cumm", "lakh/cumm", "cells/cumm", "/cumm", "cumm"},
+    "Packed cell volume": {"%"},
+    "MCV": {"fl"},
+    "MCH": {"pg"},
+    "MCHC": {"g/dl", "gm/dl", "%"},
+    "RDW": {"%"},
+    "Neutrophils": {"%"},
+    "Lymphocytes": {"%"},
+    "Monocytes": {"%"},
+    "Eosinophils": {"%"},
+    "Basophils": {"%"},
+    "Epithelial cells": {"/hpf", "/lpf"},
+    "Creatinine": {"mg/dl", "mg/l"},
+    "Urea": {"mg/dl", "mg/l"},
+    "Blood urea nitrogen": {"mg/dl", "mg/l"},
+    "Bilirubin total": {"mg/dl", "mg/l"},
+    "Bilirubin direct": {"mg/dl", "mg/l"},
+    "Bilirubin indirect": {"mg/dl", "mg/l"},
+    "AST": {"u/l", "iu/l", ".u/l"},
+    "ALT": {"u/l", "iu/l", ".u/l"},
+    "Alkaline phosphatase": {"u/l", "iu/l", ".u/l"},
+    "Random blood glucose": {"mg/dl", "mg/l"},
+    "Fasting blood glucose": {"mg/dl", "mg/l"},
+    "HbA1c": {"%"},
+    "Sodium": {"mmol/l", "meq/l"},
+    "Potassium": {"mmol/l", "meq/l", ".mmol/l"},
+    "HDL": {"mg/dl", "mg/l"},
+    "LDL": {"mg/dl", "mg/l"},
+    "Total cholesterol": {"mg/dl", "mg/l"},
+    "Triglycerides": {"mg/dl", "mg/l"},
+    "Calcium": {"mg/dl", "mg/l"},
+    "Uric acid": {"mg/dl", "mg/l"},
 }
 
 
@@ -137,6 +244,7 @@ def _extract_labs_line_based(text: str, in_urine_context: bool = False):
         abnormal = None
         ref_match = _REF_RANGE_RE.search(line[m.end():])
         lt_match = _LT_REF_RE.search(line[m.end():])
+        gt_match = _GT_REF_RE.search(line[m.end():])
         if ref_match:
             ref_low = float(ref_match.group("low"))
             ref_high = float(ref_match.group("high"))
@@ -144,9 +252,19 @@ def _extract_labs_line_based(text: str, in_urine_context: bool = False):
         elif lt_match:
             ref_high = float(lt_match.group("high"))
             abnormal = value >= ref_high
+        elif gt_match:
+            ref_low = float(gt_match.group("low"))
+            abnormal = value <= ref_low
+
+        # Fallback to clinically standard reference intervals if unprinted in report
+        if ref_low is None and ref_high is None and canonical in _DEFAULT_REFERENCE_INTERVALS:
+            def_low, def_high = _DEFAULT_REFERENCE_INTERVALS[canonical]
+            ref_low, ref_high = def_low, def_high
+            if value is not None:
+                abnormal = not (ref_low <= value <= ref_high)
 
         confidence = 0.85 if matched else 0.65
-        if ref_match or lt_match:
+        if ref_match or lt_match or gt_match:
             confidence += 0.1
         confidence = min(confidence, 0.99)
 
@@ -165,6 +283,20 @@ def _extract_labs_line_based(text: str, in_urine_context: bool = False):
         })
 
     return results
+
+
+_ALLOWED_TEST_PREFIXES = {"", "serum", "s", "s.", "blood", "total", "urine", "plasma"}
+_NON_TEST_LINE_KEYWORDS = {"method", "impedence", "impedance", "calculated", "colorimetric", "analyzer", "end of report", "processed at", "sample type"}
+
+
+def _is_valid_test_line(text: str, match_start: int) -> bool:
+    """Ensure matched test name is on its own test line, not inside an explanatory sentence or footnote."""
+    line_text = text[:match_start].split("\n")[-1].strip().lower()
+    if any(kw in line_text for kw in _NON_TEST_LINE_KEYWORDS):
+        return False
+    line_prefix = re.sub(r"[^a-z\s\.]", "", line_text).strip()
+    words = line_prefix.split()
+    return all(w in _ALLOWED_TEST_PREFIXES for w in words)
 
 
 def _extract_labs_proximity(text: str, in_urine_context: bool = False):
@@ -192,6 +324,12 @@ def _extract_labs_proximity(text: str, in_urine_context: bool = False):
             if any(abs(m.start() - pos) < 35 for pos in claimed_positions):
                 continue
 
+            # Ensure the match is an actual test line (e.g. "Serum Sodium", "HDL-Cholesterol"),
+            # and NOT an entity mention inside an educational sentence (e.g. "elevate potassium level",
+            # "High levels of HDL cholesterol are associated with...")
+            if not _is_valid_test_line(text, m.start()):
+                continue
+
             canonical, matched = normalize_lab_name(surface, in_urine_context=in_urine_context)
 
             # Window right after the matched name
@@ -206,15 +344,22 @@ def _extract_labs_proximity(text: str, in_urine_context: bool = False):
             abnormal = None
             back_num_match = re.search(r"[:=]\s*(-?\d+(?:\.\d+)?)\s*(?:[A-Za-z/]+)?\s*$", backward_window.strip())
 
-            # 1. The test result is ALWAYS anchored by a colon ':' or '=' directly following the test name
+            # 1. Look for value anchored by colon or equals, or immediately following newline
             colon_m = re.search(r"[:=]\s*(?P<val>[^\n\r]+)", window[:45])
-            if colon_m:
+            if not colon_m:
+                colon_m = re.match(r"^\s*\n\s*(?P<val>-?\d+(?:\.\d+)?)\b", window[:30])
 
+            if colon_m:
                 raw_val = colon_m.group("val").strip()
 
-                # Is it numeric? (e.g. "96", "14.43", "310.87", "30.9", "139.8", "6.5", "1.005", "9ML")
+                # Reject date strings (e.g. "21/07/26", "2026-08-06", "21-07-26") — these are dates, NOT lab values
+                # Note: single decimal point like "25.64" is a valid float, NOT a date
+                if re.search(r"^\d{1,4}[/\-]\d{1,2}|^\d{1,2}\.\d{1,2}\.\d{2,4}", raw_val):
+                    raw_val = ""
+
+                # Is it numeric? (e.g. "96", "14.43", "310.87", "30.9", "139.8", "6.5", "1.005")
                 num_m = re.match(r"^(-?\d+(?:\.\d+)?)\s*(?:ml)?(?![A-Za-z0-9])", raw_val, re.IGNORECASE)
-                # Is it qualitative? (e.g. "ABSENT", "CLEAR", "Yellow", "POSITIVE", "NIL")
+                # Is it qualitative? (e.g. "ABSENT", "CLEAR", "Yellow", "POSITIVE", "NIL", "REACTIVE", "TRACE")
                 qual_m = re.match(rf"^({_QUAL_RESULTS})\b", raw_val, re.IGNORECASE)
                 # Is it microscopic count range? (e.g. "0-1", "0-2 /HPF")
                 range_m = re.match(r"^(\d+\s*-\s*\d+)\s*(/hpf|/lpf)?", raw_val, re.IGNORECASE)
@@ -235,7 +380,7 @@ def _extract_labs_proximity(text: str, in_urine_context: bool = False):
                 elif qual_m:
                     qual_val = qual_m.group(1).upper()
                     unit = "/HPF" if "/hpf" in window[:60].lower() else None
-                    abnormal = qual_val in ("PRESENT", "POSITIVE") or ("+" in qual_val)
+                    abnormal = qual_val in ("PRESENT", "POSITIVE", "REACTIVE", "DETECTED", "TRACE") or ("+" in qual_val)
                 elif range_m:
                     qual_val = range_m.group(1).strip()
                     unit = (range_m.group(2) or "").upper() or "/HPF"
@@ -261,30 +406,37 @@ def _extract_labs_proximity(text: str, in_urine_context: bool = False):
             if value is None and qual_val is None:
                 continue
 
-            # Parse unit and reference interval
-            unit_match = re.search(_UNIT_ALTS, window[:60], re.IGNORECASE)
+            # Parse unit and reference interval — restrict unit search to same line
+            same_line_window = window.split("\n")[0]
+            unit_match = re.search(_UNIT_ALTS, same_line_window[:60], re.IGNORECASE)
             if unit_match and not unit:
                 unit = unit_match.group(0).lower()
-            # Also check backward window for unit (inverted layout: value before name)
             if not unit and backward_window:
-                unit_match_back = re.search(_UNIT_ALTS, backward_window, re.IGNORECASE)
+                same_line_back = backward_window.split("\n")[-1]
+                unit_match_back = re.search(_UNIT_ALTS, same_line_back, re.IGNORECASE)
                 if unit_match_back:
                     unit = unit_match_back.group(0).lower()
 
-            # Ref search window: from after the colon, stopping at the NEXT test's value line.
-            # We stop at the next "\n: digit" or "\n= digit" pattern — that signals another test's result,
-            # preventing ref ranges from one test leaking into an adjacent test (e.g. Sodium 135-145 → Potassium).
+            # Validate unit against _EXPECTED_UNITS to reject misplaced units (e.g. 'fl' on Albumin)
+            if canonical in _EXPECTED_UNITS:
+                expected_set = _EXPECTED_UNITS[canonical]
+                if unit and unit.lower() not in expected_set:
+                    # Incompatible unit from neighboring column/row — normalize to primary expected unit
+                    unit = next(iter(expected_set))
+                elif not unit:
+                    unit = next(iter(expected_set))
+
+            # Ref search window: from after the colon, stopping at the NEXT test's value line
             ref_search_start = colon_m.end() if colon_m else 0
             raw_ref_window = window[ref_search_start: ref_search_start + 90]
             next_val_m = re.search(r"\n\s*[:=]\s*-?\d", raw_ref_window)
             ref_search_window = raw_ref_window[:next_val_m.start()] if next_val_m else raw_ref_window
 
             ref_match = _REF_RANGE_RE.search(ref_search_window)
-            # Only search backward for ref when the value itself came from the backward window (inverted layout).
-            # This prevents cross-test leakage where the PREVIOUS test's ref appears in the backward window.
             if not ref_match and value_from_backward and backward_window:
                 ref_match = _REF_RANGE_RE.search(backward_window)
             lt_match = _LT_REF_RE.search(ref_search_window)
+            gt_match = _GT_REF_RE.search(ref_search_window)
 
             if ref_match:
                 try:
@@ -301,6 +453,20 @@ def _extract_labs_proximity(text: str, in_urine_context: bool = False):
                         abnormal = value >= ref_high
                 except ValueError:
                     pass
+            elif gt_match:
+                try:
+                    ref_low = float(gt_match.group("low"))
+                    if value is not None:
+                        abnormal = value <= ref_low
+                except ValueError:
+                    pass
+
+            # Fallback to clinically standard reference intervals if unprinted in report
+            if ref_low is None and ref_high is None and canonical in _DEFAULT_REFERENCE_INTERVALS:
+                def_low, def_high = _DEFAULT_REFERENCE_INTERVALS[canonical]
+                ref_low, ref_high = def_low, def_high
+                if value is not None:
+                    abnormal = not (ref_low <= value <= ref_high)
 
 
             confidence = 0.85 if matched else 0.65

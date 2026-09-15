@@ -58,11 +58,11 @@ _LAB_SYNONYMS = {
     ],
 
     # --- Lipid Profile ---
-    "Total cholesterol": ["total cholesterol", "cholesterol total", "serum cholesterol"],
-    "LDL": ["ldl", "ldl cholesterol", "ldl direct"],
-    "HDL": ["hdl", "hdl cholesterol"],
-    "Triglycerides": ["tg", "triglycerides", "serum triglycerides"],
-    "VLDL": ["vldl", "vldl cholesterol"],
+    "Total cholesterol": ["total cholesterol", "cholesterol total", "serum cholesterol", "cholesterol", "serum total cholesterol"],
+    "LDL": ["ldl", "ldl cholesterol", "ldl direct", "ldl-cholesterol", "serum ldl-cholesterol", "serum ldl cholesterol"],
+    "HDL": ["hdl", "hdl cholesterol", "hdl-cholesterol", "serum hdl-cholesterol", "serum hdl cholesterol", "hdl direct"],
+    "Triglycerides": ["triglycerides", "serum triglycerides", "s triglycerides", "tg triglycerides", "triglyceride"],
+    "VLDL": ["vldl", "vldl cholesterol", "vldl-cholesterol", "serum vldl-cholesterol"],
 
     # --- Thyroid Profile ---
     "TSH": ["tsh", "thyroid stimulating hormone", "ultra sensitive tsh"],
@@ -75,13 +75,15 @@ _LAB_SYNONYMS = {
     "WBC": [
         "wbc", "wbc count", "total leucocyte count", "total leukocyte count",
         "tlc", "white blood cells", "leucocyte count",
+        "total leucocyte count(tlc)", "total leucocyte count (tlc)",
+        "total leukocyte count(tlc)", "total leukocyte count (tlc)",
     ],
     "Platelets": ["platelets", "platelet count", "total platelet count", "plt"],
     "Packed cell volume": ["pcv", "packed cell volume", "hematocrit", "haematocrit", "hct"],
     "MCV": ["mcv", "mean corpuscular volume"],
     "MCH": ["mch", "mean corpuscular hemoglobin"],
     "MCHC": ["mchc", "mean corpuscular hemoglobin concentration"],
-    "RDW": ["rdw", "red cell distribution width", "rdw cv", "rdw sd"],
+    "RDW": ["rdw", "red cell distribution width", "rdw cv", "rdw sd", "rdw-cv", "rdw-sd"],
     "Neutrophils": ["neutrophils", "polymorphs", "neutrophil count", "poly"],
     "Lymphocytes": ["lymphocytes", "lymphocyte count", "lympho"],
     "Monocytes": ["monocytes", "monocyte count", "mono"],
@@ -93,7 +95,7 @@ _LAB_SYNONYMS = {
     "Urine quantity": ["quantity", "urine quantity", "volume", "urine volume"],
     "Urine colour": ["colour", "color", "urine colour", "urine color"],
     "Urine appearance": ["appearance", "urine appearance", "transparency"],
-    "Urine pH": ["ph", "urine ph"],
+    "Urine pH": ["urine ph"],
     "Urine specific gravity": [
         "specific gravity", "sp gravity", "urine specific gravity", "sp gr", "sp. gravity",
     ],
@@ -127,7 +129,9 @@ def normalize_lab_name(raw_name: str, in_urine_context: bool = False) -> tuple[s
     if not raw_name:
         return None, False
 
-    cleaned = re.sub(r"[^a-z0-9\s]", " ", raw_name.strip().lower())
+    # Strip parenthesized abbreviations e.g. "Total Leucocyte Count(TLC)" -> "Total Leucocyte Count"
+    cleaned_no_paren = re.sub(r"\([a-z0-9\s/\-]+\)", "", raw_name, flags=re.IGNORECASE)
+    cleaned = re.sub(r"[^a-z0-9\s]", " ", cleaned_no_paren.strip().lower())
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
 
     # Contextual check for urine reports:

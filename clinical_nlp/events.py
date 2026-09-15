@@ -1,36 +1,10 @@
 """
-Stage 5-8: builds structured, in-memory ClinicalEvent objects from a
-visit's clean text + diagnosis fields.
-
-No new database table is created here — events are plain dataclasses /
-dicts, optionally serializable to JSON. This module is the seam between
-"Stage 4 Clinical Record" (your existing OCR + DB-join output) and
-everything downstream (dedup, timeline, trends, report).
-
-Expected input shape for `build_events_for_visit` (one visit):
-
-    {
-        "patient_id": "...",
-        "visit_id": "...",
-        "visit_date": "2026-05-05",
-        "provisional_diagnosis": "Htn t2dm",       # optional
-        "confirmed_diagnosis": None,               # optional
-        "documents": [
-            {"document_id": "docA", "document_type": "prescription",
-             "clean_text": "..."},
-            {"document_id": "docB", "document_type": "lab_report",
-             "clean_text": "..."},
-        ],
-    }
-
-If you only have a single merged `medical_text` per visit (as in the
-original analysis.py), wrap it as one synthetic document with
-document_id=None — see longitudinal/adapters.py.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field, asdict
 from typing import Optional, Any
 import logging
+import re
 
 from clinical_nlp.labs import extract_labs
 from clinical_nlp.medications import extract_medications
@@ -39,7 +13,7 @@ from clinical_nlp.symptoms import extract_symptoms
 from clinical_nlp.temporal import resolve_event_date
 from clinical_nlp.assertion import detect_assertion, is_in_reference_text
 from clinical_nlp.ner import extract_supplementary_entities
-from normalization.medication import normalize_medication
+from normalization.medication import normalize_medication, normalize_frequency
 from normalization.diagnosis import normalize_diagnosis
 
 logger = logging.getLogger(__name__)
@@ -215,6 +189,10 @@ def build_events_for_visit(visit: dict) -> list[ClinicalEvent]:
             # medications already captured with full dose/frequency detail
             # by the rule-based extractor for THIS document — skip re-adding
             # them as a bare, dose-less NER duplicate.
+            already_found_meds = {
+                e.name.lower() for e in events
+                if e.event_type == "medication" and e.visit_id == visit_id
+            }
             already_found_dx = {
                 e.name.lower() for e in events
                 if e.event_type == "diagnosis" and e.visit_id == visit_id
@@ -235,10 +213,29 @@ def build_events_for_visit(visit: dict) -> list[ClinicalEvent]:
                 if assertion == "suspected" and is_in_reference_text(text, ent["start"], ent["end"]):
                     continue
 
+                dose = None
+                unit = None
+                freq = None
                 if category == "medication":
                     name, _ = normalize_medication(ent["name"])
-                    if name.lower() in already_found_meds:
+                    if any(
+                        name.lower() == found or name.lower() in found or found in name.lower()
+                        for found in already_found_meds
+                    ):
                         continue
+                    # Extract dose/unit and frequency looking forward after the medication name
+                    # (never look backward into the preceding medication's dose)
+                    ctx_snippet = text[ent["end"]: min(len(text), ent["end"] + 60)]
+                    dose_m = re.search(r"\b(\d+(?:\.\d+)?)\s*(mg|mcg|g|ml|iu|u)\b", ctx_snippet, re.IGNORECASE)
+                    if dose_m:
+                        try:
+                            dose = float(dose_m.group(1))
+                            unit = dose_m.group(2).lower()
+                        except ValueError:
+                            pass
+                    freq_m = re.search(r"\b(od|bd|tds|tid|bid|qid|hs|daily|once\s+daily|twice\s+daily|1-0-0|1-0-1|1-1-1)\b", ctx_snippet, re.IGNORECASE)
+                    if freq_m:
+                        freq = normalize_frequency(freq_m.group(0))
                 elif category == "diagnosis":
                     name, _ = normalize_diagnosis(ent["name"])
                     if name.lower() in already_found_dx:
@@ -256,6 +253,7 @@ def build_events_for_visit(visit: dict) -> list[ClinicalEvent]:
                     needs_verification=True,
                     source_text=text[max(0, ent["start"] - 30):ent["end"] + 20].strip(),
                     source_documents=[],
+                    dose=dose, unit=unit, frequency=freq,
                 ))
         except Exception:
             logger.exception("NER supplementary extraction failed for document %s", doc_id)

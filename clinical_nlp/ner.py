@@ -4,6 +4,7 @@ Optional generic biomedical NER layer.
 from __future__ import annotations
 import logging
 import re
+from clinical_nlp.medication_validator import validate_ner_medication
 
 logger = logging.getLogger(__name__)
 
@@ -101,9 +102,6 @@ def extract_supplementary_entities(text: str):
             continue
 
         score = float(ent.get("score", 0))
-        if score < MIN_SCORE_BY_CATEGORY.get(category, 0.70):
-            continue
-
         start, end = ent.get("start", 0), ent.get("end", 0)
         start, end = _snap_to_word_boundary(text, start, end)
 
@@ -115,6 +113,21 @@ def extract_supplementary_entities(text: str):
         if span_key in seen_spans:
             continue
         seen_spans.add(span_key)
+
+        # --- medication candidates go through context-based validation ---
+        if category == "medication":
+            validated_score = validate_ner_medication(
+                candidate=name,
+                ner_score=score,
+                source_text=text,
+            )
+            if validated_score is None:
+                continue          # rejected: identifier / structural word / too weak
+            score = validated_score
+        else:
+            # symptom / diagnosis / lab_finding keep the original threshold
+            if score < MIN_SCORE_BY_CATEGORY.get(category, 0.70):
+                continue
 
         results.append({
             "category": category,

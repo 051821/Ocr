@@ -27,4 +27,9 @@ def preprocess_for_paddle(raw_bytes):
     if max(h, w) > config.PADDLE_MAX_DIMENSION:
         scale = config.PADDLE_MAX_DIMENSION / max(h, w)
         img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    # Add a white border so characters at the document edge (common in photos taken at an angle)
+    # are not clipped by PaddleOCR's internal detection margin.
+    pad = config.PADDLE_EDGE_PADDING
+    if pad > 0:
+        img = cv2.copyMakeBorder(img, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=(255, 255, 255))
     return img

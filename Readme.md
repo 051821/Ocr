@@ -131,3 +131,30 @@ Two ways to run it:
 
 
 ssh -i "C:\Users\91739\Downloads\handwritten.pem" -N -L 8000:127.0.0.1:8000 ec2-user@13.49.196.35   
+
+
+
+
+
+### ling prompt 
+
+Analyze the supplied structured patient timeline.
+
+Use ONLY information contained in the timeline.
+
+Your task is clinical interpretation, not diagnosis or treatment.
+
+Rules:
+1. Do not invent diagnoses, symptoms, medications, laboratory values,
+   trends, causes, or clinical events.
+2. Do not infer a trend unless multiple measurements at different dates
+   support that trend.
+3. "First documented" does not mean newly diagnosed.
+4. "Documented at one visit" does not mean discontinued.
+5. Preserve laboratory values, units, dates, and reference ranges exactly.
+6. Distinguish observed findings from clinical interpretation.
+7. Identify clinically meaningful abnormalities and temporal patterns.
+8. Explicitly state when the available record is insufficient to determine
+   something.
+9. Do not prescribe, modify, start, or stop medication.
+10. Every clinically meaningful claim must reference one or more event IDs.

@@ -22,21 +22,59 @@ from data.data_fetcher import download_image_bytes, item_key
 from preprocessing.handwritten_preprocessing import encode_image_b64
 
 
+import re
+
+def collapse_repetitive_text_in_line(line: str, max_repeat: int = 2) -> str:
+    """
+    Collapses word or phrase loops within a single line.
+    E.g. 'Tab, tab, tab, tab, tab, D3, D3, D3, D3' -> 'Tab, Tab, D3, D3'
+    """
+    if not line:
+        return line
+
+    # 1. Single word loops e.g. "Tab, tab, tab, tab..." -> "Tab, Tab"
+    pattern = r'(\b[\w\-\.%/]+\b)(?:[\s,•\-\|]+\1\b){' + str(max_repeat) + r',}'
+    def _repl(match):
+        word = match.group(1)
+        return ", ".join([word] * max_repeat)
+
+    cleaned = re.sub(pattern, _repl, line, flags=re.IGNORECASE)
+
+    # 2. Short 2-3 word phrase loops e.g. "after food, after food, after food..." -> "after food, after food"
+    phrase_pattern = r'(\b[\w\-\.%/]+(?:\s+[\w\-\.%/]+){1,2}\b)(?:[\s,•\-\|]+\1\b){' + str(max_repeat) + r',}'
+    cleaned = re.sub(phrase_pattern, _repl, cleaned, flags=re.IGNORECASE)
+
+    return cleaned.strip()
 
 
-
-def text_to_lines(text, max_line_repetitions: int = 3):
+def text_to_lines(text, max_consecutive_repetitions: int = 3):
+    """
+    Splits VLM output into cleaned, non-empty lines.
+    Collapses both within-line token repetition loops and consecutive line repetition loops.
+    """
     if text is None:
         return []
     lines = []
-    seen_counts = {}
+    prev_norm = None
+    consecutive_count = 0
     for raw in text.splitlines():
         line = raw.strip()
         if not line:
+            # A blank line breaks any run of consecutive repeats.
+            prev_norm = None
+            consecutive_count = 0
             continue
+
+        # Collapse within-line token repetition loops (e.g. Tab, tab, tab... D3, D3, D3...)
+        line = collapse_repetitive_text_in_line(line)
+
         norm = line.lower()
-        seen_counts[norm] = seen_counts.get(norm, 0) + 1
-        if seen_counts[norm] > max_line_repetitions:
+        if norm == prev_norm:
+            consecutive_count += 1
+        else:
+            consecutive_count = 1
+            prev_norm = norm
+        if consecutive_count > max_consecutive_repetitions:
             continue
         lines.append(line)
     return lines
@@ -73,6 +111,7 @@ def _run_single(item, endpoint):
             }
         ],
         "temperature": 0,
+        "repetition_penalty": 1.15,
         "max_tokens": 1000,
     }
 

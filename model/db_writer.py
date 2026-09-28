@@ -48,244 +48,99 @@ def split_text_lines(text_lines):
 
     pii_lines = []
     medical_lines = []
-    in_lab_section = False
-    expect_age_sex_value = False
 
-    def has_non_english_letters(value):
-        return any(char.isalpha() and not char.isascii() for char in value)
+    # 1. Disclaimers & Consent Forms (English & Hindi)
+    disclaimer_pattern = (
+        r'(?i)\b(?:disclaimer|अग्रिम\s*सूचना|अटकल|अस्वीकरण|अस्थिरता|असदिकरण|'
+        r'remote\s+consultation|physical\s+examination|unusual\s+symptoms|adverse\s+reactions|'
+        r'emergency\s+department|drug\s+allergies|informational\s+purposes\s+only|'
+        r'prescriber\s+shall\s+not\s+be\s+liable|health\s+problem\s+or\s+disease|'
+        r'दूरस्थ\s+परामर्श|व्यापक\s+मूल्यांकन|आपातकालीन\s+विभाग|टेलीमेडिसिन\s+दिशानिर्देश|'
+        r'सहमति\s+कथन|मैं\s+सहमत|थर्ड\s+पार्टी|व्यक्तिगत\s+डेटा|गुमनाम|समग्र|'
+        r'DigiSwasthya\s+को\s+केवल|स्वास्थ्य\s+डेटा|अधिकार|अनुमति)\b'
+    )
 
-    # Standard PII patterns
+    # 2. Refusal / Error messages from LLM
+    refusal_pattern = (
+        r'(?i)\b(?:the\s+image\s+appears\s+to\s+be|text\s+is\s+not\s+clearly\s+visible|'
+        r'unable\s+to\s+extract\s+any\s+text|no\s+text\s+returned|cannot\s+read)\b'
+    )
+
+    # 3. Facility / Hospital / Center / Admin Headers
+    facility_header_pattern = (
+        r'(?i)\b(?:center\s*id|centre\s*id|facility\s*name|facility|reg\.?\s*lab|'
+        r'digiswasthya\s+telemedicine|telemedicine\s+centre|hindlabs?|hindla|hll\s+lifecare|'
+        r'mahanagar|diagnostic\s*&\s*research\s*centre|diagnostic\s*centre|research\s*centre|suraj\s+bhavan|'
+        r'out\s+patient\s+ticket|all\s+india\s+institute\s+of\s+medical\s+sciences|aiims|institute\s+of\s+national\s+importance|'
+        r'official\s+prescription|opd\s+prescription|opd\s+package|patient\s+category|opd\s+days|'
+        r'department\s*:|processed\s+at|authorized\s+by|govt\.?\s+of|महालक्ष्मी|nhm|महाराष्ट्र\s+शासन)\b'
+    )
+
+    # 4. Doctor / Staff metadata
+    doctor_pattern = (
+        r'(?i)\b(?:dr\.?\s+dr\.?|dr\.?\s+[a-z]+|consultant\s*:|ref\.?\s*by\s*doctor|'
+        r'mbbs|ddv|dermatologist|pathologist|radiologist|doctor\s+signature|signed\s+by|'
+        r'reg\.?\s*no\.?\s*:?\s*[a-z0-9\-_]+)\b'
+    )
+
+    # 5. PII - Patient Name, Patient ID, Signature, Address, Contact, Language, Timestamps
+    pii_pattern = (
+        r'(?i)\b(?:patient\s*name|patient\s*id|\bid\s*[:.-]\s*#?|\bname\s*[:.-]?|signature\s*[:.-]?|'
+        r'patient\s*information|patient’s\s*preferred\s+language|preferred\s+language|'
+        r'registration\s*no|cr\s*no|uhid|episode\s*id|nikshay|patient\s*registration\s*code|'
+        r'reg\.?\s*ref\.?\s*id|ref\.?\s*physician|referred\s+by|sample\s*coll|sample\s*col|'
+        r'reg\.?\s*date|report\s*date|visit\s*date|\bdate\s*[:.-]?|contact\s*no|mobile\s*no|phone\s*no|email\s*id|address\s*:)\b'
+    )
+
+    id_hashtag_pattern = r'^\s*#(?:[0-9A-Fa-f]{6,12})\s*$'
     phone_pattern = r'\b(?:\+91[-\s]?)?[6-9]\d{9}\b|\b\d{3,5}-\d{6,8}\b'
     email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'
     url_pattern = r'\b(?:www\.|https?://)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b'
     pincode_pattern = r'\b\d{6}\b|\b\d{3}\s*\d{3}\b'
-    
-    # Dates: numeric (11/03/2026) and textual (Mar 11, 2026 or 11-Mar-2026)
-    date_regex = (
-        r'\b\d{1,2}[-/\s.]\d{1,2}[-/\s.]\d{2,4}\b|'
-        r'\b\d{4}[-/\s.]\d{1,2}[-/\s.]\d{1,2}\b|'
-        r'\b(?:\d{1,2}[-/\s.]?)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*[-/\s.]\d{1,2}(?:st|nd|rd|th)?(?:[-/\s,.]+\d{2,4})?\b'
-    )
-
-    honorific_pattern = r'\b(?i:mr|mrs|ms|miss|master|dr|prof|sr)\b\.?\s+[A-Za-z]'
-    relation_prefix_pattern = r'\b(?i:s|d|w|c)\s*[./]\s*o\b\.?'
-
-    # Doctor credentials and titles
-    doctor_credential_pattern = (
-        r'\b(?i:mbbs|bams|bhms|bds|dnb|dgo|dch|mrcp|frcs|m\.?d\.?|m\.?s\.?|d\.?m\.?|m\.?ch\.?|diploma|fellowship)\b|'
-        r'\b(?i:reg(?:n)?\.?\s*(?:no\.?|number)?\s*:?|bmc\s*\d+|mci\s*\d+|nmc\s*\d+|council\s*reg)\b|'
-        r'\b(?i:general\s+md\s+medicine|general\s+medicine|consultant\s+physician|medical\s+officer|treating\s+doctor)\b'
-    )
-
-    # Organization / facility / browser artifacts
-    org_artifact_pattern = (
-        r'\b(?i:foundation|hospital|clinic|dispensary|trust|society|ngo|charitable|health\s*care|'
-        r'health\s*centre|nursing\s+home|polyclinic|diagnostics|institute|college|digiswasthya)\b|'
-        r'\b(?i:out:blank|about:blank)\b|'
-        r'^\s*(?i:page\s*)?\d+\s*(?:/|of)\s*\d+\s*$'
-    )
-
-    
-    admin_label_pattern = (
-        r'(?i)\b(?:patient|patent|pautent|atient)\s*(?:id|name)\b|'
-        r'\b(?:sample|specimen)\s*(?:coll(?:ection)?|col1|co11)\s*(?:date|time)?\b|'
-        r'\b(?:ref(?:erred)?|ree)\s*[:.-]?\s*(?:by)?\s*doctor\b|'
-        r'\b(?:facility|fachlity|facil(?:ity)?)\s*name\b|'
-        r'\b(?:reg(?:istration)?|report)\s*(?:date|time|date\s*/\s*time)\b'
-    )
-
-    # Administrative and demographic metadata
-    pii_keywords = [
-        'patient name', 'guardian name', 'father name', 'husband name', 'wife name',
-        'daughter name', 'son name', 'patient address', 'patient mobile', 'patient contact',
-        'contact number', 'contact no', 'mobile no', 'phone no', 'phone number', 'email id',
-        'ref. physician', 'referred by', 'reported by', 'tested by', 'date of collection',
-        'date tested', 'date reported', 'date collected', 'hospital reg', 'registration no',
-        'reg no', 'reg. no', 'episode id', 'nikshay', 'establishment id', 'laboratory name', 'lab name',
-        'signature', 'signed by', 'other contact', 'occupation', 'prescription id', 'prescription no',
-        'uhid', 'patient id', 'token no', 'bill no', 'receipt no','patient id', 'REF BY DOCTOR : DR','name'
-    ]
-
-    standalone_keywords = [
-        'landmark', 'address', 'pincode', 'district', 'state', 'uhid', 'opd', 'ipd',
-        'physician', 'referred', 'consultant', 'radiologist', 'guardian',
-        'pathologist', 'clinic', 'hospital', 'laboratory', 'institute', 'college'
-    ]
-
-    demographic_pattern = (
-        r'\b(?i:age\s*[/,&-]?\s*gender|age\s*[/,&-]?\s*sex|gender\s*[/,&-]?\s*age)\b|'
-        r'\b\d{1,3}\s*(?i:yrs?|years?|y)?\s*[/|-]\s*(?i:male|female|m|f)\b|'
-        r'\b(?i:male|female)\s*[/|-]\s*\d{1,3}\b|'
-        r'^\s*(?i:age\s*:\s*\d+)\s*$|'
-        r'^\s*(?i:gender|sex)\s*:\s*(?i:male|female|m|f)\s*$'
-    )
-
-    # Comprehensive medical vocabulary for vocabulary check & protection
-    medical_vocab = {
-        # Dosages, units, forms, frequencies
-        'tab', 'tabs', 'tablet', 'tablets', 'cap', 'caps', 'capsule', 'capsules',
-        'syr', 'syrup', 'inj', 'injection', 'oint', 'ointment', 'drops', 'drop',
-        'susp', 'suspension', 'gel', 'cream', 'lotion', 'powder', 'inhaler', 'respules',
-        'sachet', 'mg', 'gm', 'g', 'mcg', 'ug', 'ml', 'iu', 'units', 'bpm', 'mmhg',
-        'od', 'bd', 'bid', 'tds', 'tid', 'qid', 'hs', 'sos', 'bbf', 'ac', 'pc',
-        'po', 'prn', 'stat', 'q4h', 'q6h', 'q8h', 'q12h', 'daily', 'weekly', 'bedtime',
-        'morning', 'evening', 'night', 'empty', 'stomach', 'food',
-
-        # Diagnoses, conditions, symptoms
-        'htn', 't2dm', 't1dm', 'dm', 'hypertension', 'diabetes', 'diabetic', 'daibetic',
-        'asthma', 'copd', 'cad', 'ckd', 'gerd', 'fever', 'cough', 'cold', 'pain', 'ache',
-        'knee', 'neck', 'spine', 'joint', 'shoulder', 'leg', 'arm', 'hand', 'foot',
-        'head', 'chest', 'back', 'abdomen', 'throat', 'eye', 'ear', 'skin', 'headache',
-        'swelling', 'edema', 'infection', 'allergy', 'gastritis', 'ulcer', 'calculus',
-        'stones', 'arthritis', 'osteoarthritis', 'weakness', 'vomiting', 'nausea',
-        'rash', 'breathlessness', 'dyspnea', 'cs', 'ls', 'cervical', 'lumbar', 'thoracic',
-
-        # Clinical section headers & advice
-        'rx', 'dx', 'hx', 'tx', 'diagnosis', 'clinical', 'notes', 'chief', 'complaint',
-        'recom', 'recommendation', 'advice', 'diet', 'salt', 'low', 'monitoring',
-        'investigation', 'investigations', 'blood', 'test', 'tests', 'urine', 'serum',
-        'cbc', 'rbs', 'fbs', 'ppbs', 'kft', 'lft', 'hba1c', 'ecg', 'xray', 'x-ray',
-        'usg', 'ultrasound', 'mri', 'ct', 'scan', 'vitals', 'pulse', 'spo2', 'temp',
-        'temperature', 'bp', 'medicine', 'instruction', 'frequency', 'dose', 'dosage',
-        'duration', 'days', 'weeks', 'months', 'review', 'follow-up', 'followup',
-
-        # Common report findings and analytes.  These are deliberately kept
-        # separate from LAB_VOCAB: the latter describes table headings, while
-        # these appear in the individual result rows OCR returns.
-        'haemoglobin', 'hemoglobin', 'hb', 'rbc', 'wbc', 'tlc', 'dlc', 'esr',
-        'platelet', 'platelets', 'pcv', 'hematocrit', 'mcv', 'mch', 'mchc',
-        'colour', 'color', 'appearance', 'clarity', 'gravity', 'ph', 'ketone',
-        'bacteria', 'crystal', 'crystals', 'pus', 'epithelial', 'cells',
-        'microscopic', 'physical', 'chemical', 'quantity', 'volume',
-        'glucose', 'sugar', 'urea', 'creatinine', 'uric', 'bilirubin',
-        'albumin', 'globulin', 'protein', 'cholesterol', 'triglycerides',
-        'hdl', 'ldl', 'vldl', 'sodium', 'potassium', 'calcium', 'chloride',
-        'tsh', 'thyroid', 'sgot', 'sgpt', 'alp', 'crp', 'vitamin', 'b12',
-        'culture', 'sensitivity', 'positive', 'negative', 'reactive',
-        'nonreactive', 'impression', 'assessment', 'provisional', 'findings',
-        'history', 'examination', 'palpitation', 'dizziness', 'diarrhea',
-        'constipation', 'fatigue', 'anemia', 'anaemia', 'jaundice',
-
-        # Common medications
-        'amlodipine', 'telmisartan', 'metformin', 'ecosprin', 'ecopsrin', 'tramadol',
-        'calcium', 'd3', 'methocobalmin', 'methylcobalamin', 'paracetamol', 'pantoprazole',
-        'omeprazole', 'rabeprazole', 'atorvastatin', 'rosuvastatin', 'azithromycin',
-        'amoxicillin', 'clav', 'cefixime', 'ciprofloxacin', 'cetirizine', 'levocetirizine',
-        'montelukast', 'ibuprofen', 'diclofenac', 'aceclofenac', 'ranitidine', 'domperidone',
-        'ondansetron', 'multivitamin', 'complex', 'zinc', 'iron', 'folic', 'acid',
-        'insulin', 'glimepiride', 'vildagliptin', 'teneligliptin', 'dapagliflozin',
-        'empagliflozin', 'losartan', 'enalapril', 'ramipril', 'atenolol', 'metoprolol',
-        'propranolol', 'clopidogrel', 'heparin', 'warfarin', 'doxycycline', 'metronidazole',
-        'salbutamol', 'budesonide', 'formoterol', 'fluticasone', 'levothyroxine', 'thyroxine',
-        'prednisolone', 'dexamethasone', 'av'
-    }
-
-    # Add config lab vocab
-    medical_vocab.update(
-        word.lower()
-        for phrase in config.LAB_VOCAB
-        for word in re.findall(r'[A-Za-z]+', phrase)
-    )
 
     def extract_age_gender(line):
-        age_sex = re.search(
-            r'(?i)\b(?:age\s*[/,&-]?\s*(?:gender|sex)?\s*[:.-]?\s*)?'
-            r'(\d{1,3})\s*(?:yrs?|years?|y)?(?:\s*[/|-]\s*|\s+)'
-            # ``N`` is a frequent OCR substitution for the printed ``M``.
-            r'(male|female|ml|fl|m|f|n)\b',
-            line,
-        )
-        if age_sex:
-            age, gender = age_sex.groups()
-            return f"Age/Sex: {age}/{'F' if gender.lower().startswith('f') else 'M'}"
-
-        age = re.search(r'(?i)\bage\s*[:/.,-]?\s*(\d{1,3})\b', line)
-        gender = re.search(r'(?i)\b(?:gender|sex)\s*[:/.,-]?\s*(male|female|ml|fl|m|f|n)\b', line)
-        if age and gender:
-            sex = 'F' if gender.group(1).lower().startswith('f') else 'M'
-            return f"Age/Sex: {age.group(1)}/{sex}"
-        if age:
-            return f"Age: {age.group(1)}"
-        if gender:
-            sex = 'F' if gender.group(1).lower().startswith('f') else 'M'
-            return f"Sex: {sex}"
+        line_clean = re.sub(r'[*`|_]+', '', line).strip()
+        m = re.search(r'(?i)\b(\d{1,3})\s*(?:y|yrs?|years?)?\s*[-/•,\s]+\s*(male|female|m|f)\b', line_clean)
+        if m:
+            age, sex = m.groups()
+            s_char = 'F' if sex.lower().startswith('f') else 'M'
+            return f"Age/Sex: {age}/{s_char}"
+        m_age = re.search(r'(?i)\bage\s*[:.-]?\s*(\d{1,3})\b', line_clean)
+        m_sex = re.search(r'(?i)\b(?:gender|sex)\s*[:.-]?\s*(male|female|m|f)\b', line_clean)
+        if m_age and m_sex:
+            s_char = 'F' if m_sex.group(1).lower().startswith('f') else 'M'
+            return f"Age/Sex: {m_age.group(1)}/{s_char}"
+        if m_age:
+            return f"Age: {m_age.group(1)}"
+        if m_sex:
+            s_char = 'F' if m_sex.group(1).lower().startswith('f') else 'M'
+            return f"Sex: {s_char}"
         return None
 
-    def has_medical_content(line):
-        """Whether a non-metadata line is suitable for clean_text.
-
-        clean_text is an allow-list: unrecognised OCR must stay in
-        extracted_text rather than being treated as clinical information.
-        """
-        words = set(re.findall(r'[a-z]+', line.lower()))
-        if words & medical_vocab:
-            return True
-        if is_lab_section_signal(line):
-            return True
-        return bool(re.search(r'(?i)\b(?:mmol\s*/\s*l|meq\s*/\s*l|µ?mol\s*/\s*l|'
-                              r'u?g\s*/\s*(?:dl|ml)|mg\s*/\s*(?:dl|l)|'
-                              r'g\s*/\s*(?:dl|l)|%|fl|pg)\b', line))
-
-    def is_lab_section_signal(line):
-        return bool(re.search(
-            r'(?i)\b(?:investigation|biochemistry|haematology|hematology|'
-            r'pathology|result|units?|reference|ref\.?\s*interval|'
-            r'interpretation|sample\s*type|meth(?:od|os|oe|ad)|serum|plasma|urine|'
-            r'urea(?:se)?|gldh)\b',
-            line,
-        ))
-
-    def is_lab_value_or_range(line):
-        """Match an OCR cell containing only a lab result or reference range."""
-        if re.match(
-            r'^\s*[:\uff1a]?\s*(?:absent|present|positive|negative|nil|trace|'
-            r'clear|turbid|yellow|pale\s+yellow|normal|abnormal|reactive|'
-            r'non[-\s]?reactive|few|moderate|many|none|/\s*hpf|/\s*lpf|'
-            r'(?:mg|g|ml|mmol|meq)\s*/\s*(?:dl|l)|ml)\s*$',
-            line,
-            re.IGNORECASE,
-        ):
-            return True
-        return bool(re.match(
-            r'^\s*[:：]?\s*(?:[<>≤≥]\s*)?\d+(?:\.\d+)?'
-            r'(?:\s*(?:-|–|—|to)\s*(?:[<>≤≥]\s*)?\d*(?:\.\d+)?)?\s*$',
-            line,
-            re.IGNORECASE,
-        ))
-
-    def is_clearly_medical(line):
-        """Returns True if the line contains unequivocal medical signals."""
-        lower = line.lower()
-        # Strength / dosage pattern (e.g. 5 mg, 500 mg, 1500 ug)
-        if re.search(r'\b\d+(?:\.\d+)?\s*(?:mg|gm|g|mcg|ug|ml|iu|units?)\b', lower):
-            return True
-        # Medicine dosage form prefix
-        if re.search(r'\b(?:tab(?:\.|\b)|cap(?:\.|\b)|syr(?:\.|\b)|inj(?:\.|\b)|oint(?:\.|\b)|drops?|susp(?:\.|\b)|cream|gel|lotion)\b', lower):
-            return True
-        # Core medical diagnosis / clinical terms
-        if re.search(r'\b(?:htn|t2dm|t1dm|dm|hypertension|diabetes|daibetic|diabetic|knee\s+pain|neck\s+pain|chest\s+pain|back\s+pain|clinical\s+notes?|diagnosis|recom(?::|\b)|blood\s+test|lipid\s+profile|cbc|rbs|fbs|ppbs|kft|lft|hba1c|ecg|xray|x-ray|cs\s+spine|bp\s+monitoring|low\s+salt|ha?emoglobin|\bhb\b|rbc|wbc|tlc|dlc|platelets?|hematocrit|mcv|mchc?|glucose|creatinine|bilirubin|cholesterol|triglycerides?|\b(?:hdl|ldl|vldl|tsh|sgot|sgpt|crp)\b|uric\s+acid|electrolytes?|culture\s*(?:&|and)?\s*sensitivity|impression|provisional\s+diagnosis|clinical\s+findings?)\b', lower):
-            return True
-        # Table headers in Rx section
-        if lower in ('medicine', 'instruction', 'frequency', 'rx', 'diagnosis', 'clinical notes', 'investigations', 'blood test'):
-            return True
-        return False
-
-    def looks_like_bare_name(s):
-        """Identify an unlabeled patient/doctor name on its own line.
-        Never flags lines that contain medical terms or dosage digits."""
-        if is_lab_section_signal(s):
-            return False
-        tokens = s.split()
+    def is_bare_patient_name(line):
+        clean = re.sub(r'[*`|_]+', '', line).strip()
+        tokens = clean.split()
         if not (2 <= len(tokens) <= 4):
             return False
+        medical_words = {
+            'tab', 'cap', 'syr', 'inj', 'ointment', 'cream', 'lotion', 'mg', 'gm', 'ml',
+            'daily', 'days', 'weeks', 'after', 'before', 'food', 'tinea', 'eczema',
+            'folliculitis', 'vitals', 'pulse', 'bp', 'temp', 'spo2', 'heels', 'cracked',
+            'follow', 'up', 'next', 'fluconazole', 'citrizine', 'miconazole', 'lobet',
+            'vasaline', 'topisal', 'augmentin', 'fucibet', 'omnacortil', 'atarax',
+            'investigation', 'result', 'units', 'hemoglobin', 'rbc', 'wbc', 'tlc', 'dlc',
+            'pcv', 'mcv', 'mch', 'mchc', 'platelet', 'count', 'serum', 't3', 't4', 'tsh',
+            'eclia', 'blood', 'glucose', 'rbs', 'hba1c', 'iron', 'bilirubin', 'creatinine',
+            'as', 'needed', 'twice', 'week', 'times', 'day', 'chief', 'complaint',
+            'provisional', 'diagnosis', 'impression', 'medications', 'strength', 'dosage',
+            'frequency', 'duration', 'notes', 'timing', 'history', 'illness', 'present'
+        }
         for tok in tokens:
+            t_lower = tok.lower()
+            if t_lower in medical_words or any(c.isdigit() for c in tok):
+                return False
             core = re.sub(r'[^A-Za-z]', '', tok)
-            if not core:
-                return False
-            if core.lower() in medical_vocab:
-                return False
-            # Must look like a capitalized human name
-            if not ((len(core) == 1 and core.isupper()) or core.isupper() or (core[0].isupper() and core[1:].islower())):
+            if not core or not core[0].isupper():
                 return False
         return True
 
@@ -294,148 +149,62 @@ def split_text_lines(text_lines):
         if not line_str:
             continue
 
-        if line_str in ("```", "'''"):
-            continue
-
-        line_str = re.sub(r'\[ILLEGIBLE\]', '', line_str, flags=re.IGNORECASE).strip()
-        if not line_str:
-            continue
-
-        # Keep non-English OCR text for reference in extracted_text (clean_text stays English)
-        if has_non_english_letters(line_str):
+        if line_str in ("```", "'''", "---", "--"):
             pii_lines.append(line_str)
             continue
 
-        # Ignore / filter lines consisting solely of tick marks, checkmarks, dashes, or punctuation
-        if not re.search(r'[A-Za-z0-9]', line_str):
+        line_str_clean = re.sub(r'\[ILLEGIBLE\]', '', line_str, flags=re.IGNORECASE).strip()
+        if not line_str_clean or line_str_clean.upper() in ("[UNCLEAR]", "UNCLEAR"):
             pii_lines.append(line_str)
             continue
 
-        line_lower = line_str.lower()
-        is_pii = False
-
-        if is_lab_section_signal(line_str):
-            in_lab_section = True
-
-        # Check for pure metadata date/timestamp lines (e.g. "Mar 11, 2026, 11:53 AM")
-        is_pure_date = bool(re.match(r'^(?:date\s*[:.-]?\s*)?' + date_regex + r'(?:\s*,\s*\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm)?)?\s*$', line_str, re.IGNORECASE))
-        if is_pure_date:
+        if re.match(r'^\s*\|?\s*[:\-\s|]+\s*\|?\s*$', line_str_clean) or not re.search(r'[A-Za-z0-9]', line_str_clean):
             pii_lines.append(line_str)
             continue
 
-        # Age and sex are permitted clinical demographics, even if OCR puts
-        # them on the same line as a patient's name or other PII.  Store the
-        # normalised value in clean_text while retaining the original line in
-        # extracted_text for the PII filter.
-        demographic_text = extract_age_gender(line_str)
-        if demographic_text and re.search(r'\b(?:age|sex|gender)\b', line_lower):
-            medical_lines.append(demographic_text)
+        line_lower = line_str_clean.lower()
+
+        if re.search(refusal_pattern, line_str_clean):
             pii_lines.append(line_str)
             continue
 
-        # Some report tables put ``AGE/SEX`` in one OCR cell and ``57 YEAR
-        # F`` in the following cell.  Treat only that following value as
-        # demographic data; it must not make arbitrary numeric rows medical.
-        if expect_age_sex_value:
-            expect_age_sex_value = False
-            demographic_text = extract_age_gender(line_str)
-            if demographic_text:
-                medical_lines.append(demographic_text)
+        demo_text = extract_age_gender(line_str_clean)
+        if demo_text and not re.search(disclaimer_pattern, line_str_clean) and not re.search(facility_header_pattern, line_str_clean) and not re.search(doctor_pattern, line_str_clean):
+            if demo_text not in medical_lines:
+                medical_lines.append(demo_text)
+            if re.search(r'(?i)\b(?:name|id|patient)\b', line_lower) or is_bare_patient_name(line_str_clean):
+                pii_lines.append(line_str)
+            continue
+
+        if re.search(disclaimer_pattern, line_str_clean):
             pii_lines.append(line_str)
             continue
 
-        # Age and gender are deliberately retained, but all other patient
-        # data on the same OCR line is excluded.
-        if re.search(demographic_pattern, line_str):
-            demographic_text = extract_age_gender(line_str)
-            if demographic_text:
-                medical_lines.append(demographic_text)
-            elif re.fullmatch(r'(?i)\s*age\s*[/,&-]?\s*(?:gender|sex)\s*', line_str):
-                expect_age_sex_value = True
+        if re.search(facility_header_pattern, line_str_clean):
             pii_lines.append(line_str)
             continue
 
-        # Check explicitly medical lines first to protect them from false PII matching
-        if is_clearly_medical(line_str):
-            # Still verify if it has a direct patient prefix (e.g. "Patient Name: ...")
-            if not any(line_lower.startswith(prefix) for prefix in ('patient name:', 'patient:', 'pt name:', 'name:')):
-                cleaned_line = re.sub(phone_pattern, '', line_str)
-                cleaned_line = re.sub(email_pattern, '', cleaned_line)
-                cleaned_line = re.sub(r'\s+', ' ', cleaned_line).strip()
-                if cleaned_line:
-                    medical_lines.append(cleaned_line)
-                continue
-
-        # 1. Honorific + name (Mrs. Rekha, Dr. Pankaj Kumar)
-        if re.search(honorific_pattern, line_str):
-            is_pii = True
-
-        # 2. Doctor credentials & registration numbers (MBBS MD, Reg. No: BMC ...)
-        elif re.search(doctor_credential_pattern, line_str):
-            is_pii = True
-
-        # 3. Organization headers & browser artifacts (DigiSwasthya Foundation, out:blank)
-        elif re.search(org_artifact_pattern, line_str):
-            is_pii = True
-
-        # 4. Administrative report labels, including OCR variants
-        elif re.search(admin_label_pattern, line_str):
-            is_pii = True
-
-        # 5. Phone, email, url
-        elif re.search(phone_pattern, line_str) or re.search(email_pattern, line_str) or re.search(url_pattern, line_lower):
-            is_pii = True
-
-        # 6. Pure digit / ID lines
-        elif re.match(r'^\s*\d{5,}\s*$', line_str):
-            is_pii = True
-
-        # 6. Multi-word PII prefixes
-        elif any(kw in line_lower for kw in pii_keywords):
-            is_pii = True
-
-        # 7. Patient demographics keywords
-        elif 'patient' in line_lower:
-            is_pii = True
-
-        # 8. Relation prefixes S/O, D/O, W/O, C/O
-        elif re.search(relation_prefix_pattern, line_str):
-            is_pii = True
-
-        # 9. Standalone keywords (word-boundary matched)
-        if not is_pii:
-            for kw in standalone_keywords:
-                if re.search(r'\b' + re.escape(kw) + r'\b', line_lower) or line_lower.startswith(kw):
-                    is_pii = True
-                    break
-
-        # 10. Date lines (starting with date or matching date pattern without medical context)
-        if not is_pii:
-            if line_lower.startswith('date') or (re.search(date_regex, line_str) and not any(w in line_lower for w in ('tab', 'mg', 'od', 'bd', 'pain', 'diet', 'test'))):
-                is_pii = True
-
-        # 11. Pincode-bearing lines
-        if not is_pii:
-            if re.search(pincode_pattern, line_str):
-                is_pii = True
-
-        # 12. Bare unlabeled name fallback (e.g. "Jijabai Dhoke" on its own line)
-        if not is_pii and not in_lab_section:
-            if looks_like_bare_name(line_str):
-                is_pii = True
-
-        if is_pii:
+        if re.search(doctor_pattern, line_str_clean):
             pii_lines.append(line_str)
-        elif has_medical_content(line_str) or in_lab_section:
-            cleaned_line = re.sub(phone_pattern, '', line_str)
-            cleaned_line = re.sub(email_pattern, '', cleaned_line)
-            cleaned_line = re.sub(r'\s+', ' ', cleaned_line).strip()
-            if cleaned_line:
-                medical_lines.append(cleaned_line)
-        else:
-            # Unknown text (including OCR'd patient/facility/ID fragments) is
-            # retained only in extracted_text, never promoted to clean_text.
+            continue
+
+        if (re.search(pii_pattern, line_str_clean) or 
+            re.search(id_hashtag_pattern, line_str_clean) or 
+            re.search(phone_pattern, line_str_clean) or 
+            re.search(email_pattern, line_str_clean) or 
+            re.search(url_pattern, line_lower) or 
+            re.search(pincode_pattern, line_str_clean) or
+            is_bare_patient_name(line_str_clean)):
             pii_lines.append(line_str)
+            continue
+
+        # Dates / dotted date lines
+        if re.match(r'^\s*(?:\*\*|##\s*)?(?:date\s*[:.-]?\s*)?(?:\.|\d{1,2}[-/\s.](?:\d{1,2}|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[-/\s.]\d{2,4}|\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{2,4}|\.{3,})\s*(?:\*\*|##)?\s*$', line_str_clean, re.IGNORECASE):
+            pii_lines.append(line_str)
+            continue
+
+        cleaned_medical = line_str.strip()
+        medical_lines.append(cleaned_medical)
 
     return pii_lines, medical_lines
 

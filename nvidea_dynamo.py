@@ -2,23 +2,27 @@ import requests
 import time
 import json
 
-from config import OPENROUTER_API_KEY
-
 
 # ============================================================
-# OPENROUTER CONFIGURATION
+# DYNAMO CONFIGURATION
 # ============================================================
 
-URL = "https://openrouter.ai/api/v1/chat/completions"
+URL = "http://localhost:8000/v1/chat/completions"
 
 HEADERS = {
-    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
     "Content-Type": "application/json",
 }
 
 
 # ============================================================
-# YOUR MEDICAL INPUT
+# MODEL
+# ============================================================
+
+MODEL = "Qwen/Qwen3-0.6B"
+
+
+# ============================================================
+# MEDICAL INPUT
 # ============================================================
 
 medical_input = """
@@ -90,7 +94,7 @@ This is synthetic sample text created for software/OCR testing and is not medica
 
 
 # ============================================================
-# PROMPT
+# SAME PROMPT AS OPENROUTER VERSION
 # ============================================================
 
 prompt = f"""
@@ -185,7 +189,7 @@ Patient data:
 # ============================================================
 
 print("=" * 70)
-print("OPENROUTER + LING FLASH BENCHMARK")
+print("DYNAMO + vLLM BENCHMARK")
 print("=" * 70)
 
 
@@ -195,7 +199,7 @@ response = requests.post(
     URL,
     headers=HEADERS,
     json={
-        "model": "inclusionai/ling-3.0-flash-sante:free",
+        "model": MODEL,
 
         "messages": [
             {
@@ -204,11 +208,9 @@ response = requests.post(
             }
         ],
 
-        "reasoning": {
-            "enabled": True
-        },
+        "temperature": 0.0,
 
-        "temperature": 0.0
+        "max_tokens": 1000
     },
 
     timeout=300
@@ -226,7 +228,7 @@ answer = message.get("content", "")
 
 
 # ============================================================
-# EXTRACT USAGE
+# USAGE
 # ============================================================
 
 usage = result.get("usage", {})
@@ -237,19 +239,21 @@ total_tokens = usage.get("total_tokens")
 
 
 # ============================================================
-# CALCULATE METRICS
+# PERFORMANCE
 # ============================================================
 
 total_latency = end_time - start_time
 
 if completion_tokens:
-    output_tokens_per_second = completion_tokens / total_latency
+    output_tokens_per_second = (
+        completion_tokens / total_latency
+    )
 else:
     output_tokens_per_second = None
 
 
 # ============================================================
-# PRINT RESULTS
+# RESULTS
 # ============================================================
 
 print("\nRESULT")

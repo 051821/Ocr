@@ -149,8 +149,29 @@ def classifier_config_fingerprint():
 CLASSIFIER_CONFIG_FINGERPRINT = classifier_config_fingerprint()
 
 # ---------------------------------------------------------------------------
-# STAGE 2 -- PRINTED MODEL: PaddleOCR (own preprocessing + own thresholds)
+# STAGE 2 -- PRINTED MODEL: Mistral OCR (via OpenRouter PDF file parser plugin)
 # ---------------------------------------------------------------------------
+MISTRAL_OCR_URL = os.environ.get("MISTRAL_OCR_URL", "https://openrouter.ai/api/v1/chat/completions")
+MISTRAL_OCR_DOWNSTREAM_MODEL = os.environ.get("MISTRAL_OCR_DOWNSTREAM_MODEL", "mistralai/mistral-small-3.2-24b-instruct")
+MISTRAL_OCR_MAX_IMAGE_BYTES = _env_int("MISTRAL_OCR_MAX_IMAGE_BYTES", 4_500_000)
+MISTRAL_OCR_MAX_RETRIES = _env_int("MISTRAL_OCR_MAX_RETRIES", 3)
+MISTRAL_OCR_TIMEOUT = _env_int("MISTRAL_OCR_TIMEOUT", 60)
+MISTRAL_OCR_CONCURRENCY = _env_int("MISTRAL_OCR_CONCURRENCY", 3)
+MISTRAL_OCR_SAVE_EVERY = _env_int("MISTRAL_OCR_SAVE_EVERY", 10)
+MISTRAL_OCR_PROMPT = (
+    "Extract ALL text from this medical document.\n\n"
+    "IMPORTANT:\n"
+    "- Perform transcription only.\n"
+    "- Do not diagnose the patient.\n"
+    "- Do not interpret medical findings.\n"
+    "- Do not summarize.\n"
+    "- Do not correct apparent spelling mistakes.\n"
+    "- Preserve medication names, numbers, doses, units, dates, abbreviations and measurements exactly as they appear whenever possible.\n"
+    "- If handwriting is unclear, mark it as [UNCLEAR] rather than guessing.\n"
+    "- Return the transcription in reading order.\n"
+    "- Return only the extracted/transcribed text."
+)
+
 PADDLE_MAX_DIMENSION = 2000  # printed docs are usually high-res scans -> keep detail
 PADDLE_CONFIDENCE_THRESHOLD = _env_float("PADDLE_CONFIDENCE_THRESHOLD", 0.5)
 PADDLE_LONG_TEXT_MIN_CHARS = 25
@@ -170,6 +191,11 @@ PADDLE_DEVICE = os.environ.get("PADDLE_DEVICE", "gpu:0")  # constraint: GPU buil
 ROW_TOLERANCE = 15
 COLUMN_GAP_THRESHOLD = 120
 PADDLE_EDGE_PADDING = _env_int("PADDLE_EDGE_PADDING", 20)  # px white border added before OCR to prevent edge-clipping
+PADDLE_ARTIFACT_SCORE_MIN = _env_float("PADDLE_ARTIFACT_SCORE_MIN", 0.30)      # raised from 0.25
+PADDLE_ROW_GAP_MULTIPLIER = _env_float("PADDLE_ROW_GAP_MULTIPLIER", 0.50)      # optimal for document table rows
+PADDLE_ROW_GAP_MAX = _env_float("PADDLE_ROW_GAP_MAX", 12.0)                    # max row gap px
+PADDLE_JUNK_SCORE_THRESHOLD = _env_float("PADDLE_JUNK_SCORE_THRESHOLD", 0.65)  # below this, run extra junk checks
+PADDLE_ROW_OVERLAP_MIN = _env_float("PADDLE_ROW_OVERLAP_MIN", 0.30)            # min Y-overlap fraction to force same row
 
 LAB_VOCAB = [
     "Investigation", "Result", "Units", "Bio. Ref. Interval", "Interpretation",
@@ -198,6 +224,7 @@ VITALS_UNIT_HINTS = {
 # ---------------------------------------------------------------------------
 # STAGE 3 -- HANDWRITTEN MODEL: EC2-hosted vLLM (own preprocessing, no OCR score gate)
 # ---------------------------------------------------------------------------
+ENABLE_HANDWRITTEN_OCR = _env_bool("ENABLE_HANDWRITTEN_OCR", False)
 HANDWRITTEN_MAX_DIMENSION = 720  # much smaller than Paddle's -- vLLM is far more size/token sensitive
 HANDWRITTEN_ENDPOINT = os.environ.get("HANDWRITTEN_ENDPOINT", "http://127.0.0.1:8000")
 HANDWRITTEN_TIMEOUT = _env_int("HANDWRITTEN_TIMEOUT", 120)
@@ -241,3 +268,12 @@ if not OPENROUTER_API_KEY:
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+
+
+
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "digiswasthyafilescopy")
+SUPABASE_S3_ACCESS_KEY_ID = os.getenv("SUPABASE_S3_ACCESS_KEY_ID")
+SUPABASE_S3_SECRET_ACCESS_KEY = os.getenv("SUPABASE_S3_SECRET_ACCESS_KEY")
+SUPABASE_S3_REGION = os.getenv("SUPABASE_S3_REGION")

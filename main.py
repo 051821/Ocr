@@ -23,7 +23,7 @@ from model.load_model import (
     start_ec2_instance,
     stop_ec2_instance,
 )
-from model.paddel import run_printed_ocr
+from model.mistral_printed import run_printed_ocr
 from model.handwritten import run_handwritten_ocr
 
 
@@ -334,7 +334,7 @@ def main():
         printed_items, handwritten_items = classify_batch(manifest)
 
         if printed_items:
-            print("=== STAGE 2: PaddleOCR (printed) -> DB ===")
+            print("=== STAGE 2: Mistral OCR (printed) -> DB ===")
             run_printed_ocr(printed_items)
         else:
             print("=== STAGE 2: skipped, no printed images this run ===")

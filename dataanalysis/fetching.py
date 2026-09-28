@@ -19,12 +19,16 @@ def fetch_batch(limit=2, offset=0):
                     de.visit_id AS vid,
                     de.clean_text AS info,
                     v.created_at,
-                    v.chief_complaint
+                    v.chief_complaint,
+                    p.confirmed_diagnosis
 
                 FROM document_extraction de
 
                 LEFT JOIN visit v
                     ON v.id = de.visit_id
+                
+                LEFT JOIN prescription p
+                    ON p.visit_id = de.visit_id
 
                 WHERE de.clean_text IS NOT NULL
 
@@ -87,6 +91,7 @@ def prepare_medical_records(rows):
             ),
 
             "chief_complaint": row["chief_complaint"],
+            "confirmed_diagnosis": row["confirmed_diagnosis"],
 
             "medical_document_text": cleaned_ocr_text
         }

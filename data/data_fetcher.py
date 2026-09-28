@@ -1,20 +1,29 @@
 """
 data/data_fetcher.py
-Fetches medical documents from the PostgreSQL patientdocument table (Supabase storage URLs).
-Constructs a manifest without downloading images to local disk.
+Fetches medical documents listed in the PostgreSQL patientdocument table.
+
+The authoritative location of each document is patientdocument.storage_key,
+the object path inside the Supabase Storage bucket (default
+`digiswasthyafilescopy`). Objects are read through Supabase's S3-compatible
+endpoint with the project's S3 access keys (same variables the API uses:
+SUPABASE_URL, SUPABASE_BUCKET, SUPABASE_S3_ACCESS_KEY_ID,
+SUPABASE_S3_SECRET_ACCESS_KEY).
+
+The legacy patientdocument.file_path (old AWS S3 URL) is kept in the manifest
+for reference / skip-key backward compatibility only and is NEVER used to
+download anything. Image bytes are downloaded in memory only.
 """
 import os
-import re
+import posixpath
 import sys
-from urllib.parse import unquote, urlparse
-import boto3
 
 # Ensure project root is in sys.path when running as a standalone script
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-import requests
+import boto3
+from botocore.config import Config as BotoConfig
 from sqlalchemy import create_engine, text
 
 import config
@@ -22,40 +31,39 @@ import config
 if not config.DATABASE_URL:
     raise RuntimeError("DATABASE_URL is missing from .env or config")
 
+# --- Supabase Storage (S3-compatible) configuration -------------------
+SUPABASE_URL = getattr(config, "SUPABASE_URL", None)
+SUPABASE_BUCKET = getattr(config, "SUPABASE_BUCKET", None) or "digiswasthyafilescopy"
+_S3_ACCESS_KEY_ID = getattr(config, "SUPABASE_S3_ACCESS_KEY_ID", None)
+_S3_SECRET_ACCESS_KEY = getattr(config, "SUPABASE_S3_SECRET_ACCESS_KEY", None)
+_S3_REGION = getattr(config, "SUPABASE_S3_REGION", None)
+# Optional override; otherwise derived from SUPABASE_URL (…/storage/v1/s3).
+_S3_ENDPOINT = getattr(config, "SUPABASE_S3_ENDPOINT", None) or (
+    SUPABASE_URL.rstrip("/") + "/storage/v1/s3" if SUPABASE_URL else None
+)
+
+_missing = [
+    name for name, val in {
+        "SUPABASE_URL (or SUPABASE_S3_ENDPOINT)": _S3_ENDPOINT,
+        "SUPABASE_S3_ACCESS_KEY_ID": _S3_ACCESS_KEY_ID,
+        "SUPABASE_S3_SECRET_ACCESS_KEY": _S3_SECRET_ACCESS_KEY,
+        "SUPABASE_S3_REGION": _S3_REGION,
+    }.items() if not val
+]
+if _missing:
+    raise RuntimeError("Missing from .env or config: " + ", ".join(_missing))
+
 ENGINE = create_engine(config.DATABASE_URL, pool_pre_ping=True)
 IMAGE_EXTENSIONS = config.IMAGE_EXTENSIONS
 
-# --- S3 support -------------------------------------------------------
-# Authenticated client for private S3 objects (e.g. testdigiaarogyasaarathifiles).
-# Credentials come from config.py / .env, or from an IAM role if those are None.
 S3_CLIENT = boto3.client(
     "s3",
-    aws_access_key_id=getattr(config, "AWS_ACCESS_KEY_ID", None),
-    aws_secret_access_key=getattr(config, "AWS_SECRET_ACCESS_KEY", None),
-    region_name=getattr(config, "AWS_REGION", None),
+    endpoint_url=_S3_ENDPOINT,
+    aws_access_key_id=_S3_ACCESS_KEY_ID,
+    aws_secret_access_key=_S3_SECRET_ACCESS_KEY,
+    region_name=_S3_REGION,
+    config=BotoConfig(s3={"addressing_style": "path"}, connect_timeout=10, read_timeout=30),  # required by Supabase
 )
-
-# Matches virtual-hosted-style (bucket.s3.region.amazonaws.com/key)
-# and path-style (s3.region.amazonaws.com/bucket/key) S3 URLs.
-_S3_URL_RE = re.compile(
-    r"^https?://(?:(?P<bucket1>[^.]+)\.s3[.-][\w-]*\.amazonaws\.com/(?P<key1>.+)"
-    r"|s3[.-][\w-]*\.amazonaws\.com/(?P<bucket2>[^/]+)/(?P<key2>.+))$"
-)
-
-
-def _parse_s3_url(file_url):
-    """Return (bucket, key) if file_url is an S3 URL, else None."""
-    if file_url.startswith("s3://"):
-        without_scheme = file_url[len("s3://"):]
-        bucket, _, key = without_scheme.partition("/")
-        return bucket, unquote(key)
-
-    m = _S3_URL_RE.match(file_url)
-    if not m:
-        return None
-    bucket = m.group("bucket1") or m.group("bucket2")
-    key = m.group("key1") or m.group("key2")
-    return bucket, unquote(key)
 # ------------------------------------------------------------------------
 
 
@@ -68,8 +76,10 @@ def skip_key(item):
     return item["file_name"]
 
 
-def _file_name(file_path):
-    return unquote(os.path.basename(urlparse(file_path).path))
+def _file_name(storage_key):
+    """Derive the file name from a storage_key (an object path, not a URL,
+    so it is used as-is with no URL-decoding)."""
+    return posixpath.basename(storage_key)
 
 
 def load_skip_keys():
@@ -79,45 +89,51 @@ def load_skip_keys():
 
 
 def _list_database_images():
-    """Query image documents for patients whose last name is OCR."""
+    """Query image documents that have a usable Supabase storage_key."""
     query = text(r"""
         SELECT
             pd.file_path,
+            pd.storage_key,
             pd.patient_id,
             pd.visit_id
         FROM "patientdocument" pd
         JOIN "patient" p
             ON p.id = pd.patient_id
-        WHERE pd.file_path ~* '\.(jpg|jpeg|png|webp|gif)$'
+        WHERE pd.storage_key IS NOT NULL
+          AND pd.storage_key ~* '\.(jpg|jpeg|png|webp|gif)$'
           AND pd.visit_id IS NOT NULL
-          AND p.full_name ~* '(^|[[:space:]])ocr$'
-        ORDER BY pd.file_path
+        ORDER BY pd.storage_key
     """)
 
     with ENGINE.connect() as conn:
         return conn.execute(query).mappings().all()
 
 
-def download_image_bytes(file_url):
-    """Fetch image bytes in memory. Uses an authenticated S3 GET for private
-    S3 URLs, and a plain HTTP GET for everything else (e.g. public Supabase
-    URLs). No file is saved locally to disk either way."""
-    s3_target = _parse_s3_url(file_url)
+def download_image_bytes(storage_key):
+    """Download an image from Supabase Storage straight into memory.
 
-    if s3_target:
-        bucket, key = s3_target
-        try:
-            obj = S3_CLIENT.get_object(Bucket=bucket, Key=key)
-            return obj["Body"].read()
-        except Exception as e:
-            print(f"[s3] error downloading s3://{bucket}/{key}: {e}")
-            raise
+    `storage_key` is the object path inside the bucket
+    (patientdocument.storage_key). The legacy AWS `file_path` URL must not be
+    passed here. No file is saved locally to disk.
+    """
+    if not storage_key:
+        raise ValueError("download_image_bytes requires a non-empty storage_key")
+    if storage_key.startswith(("http://", "https://", "s3://")):
+        raise ValueError(
+            f"download_image_bytes expects a Supabase storage_key, not a URL: {storage_key!r}. "
+            "Use item['storage_key'], not item['file_path']."
+        )
 
-    resp = requests.get(file_url, timeout=60)
-    if resp.status_code != 200:
-        print(f"[database] HTTP {resp.status_code} downloading {file_url}: {resp.text[:300]!r}")
-        resp.raise_for_status()
-    return resp.content
+    try:
+        obj = S3_CLIENT.get_object(Bucket=SUPABASE_BUCKET, Key=storage_key)
+        data = obj["Body"].read()
+    except Exception as e:
+        print(f"[supabase] error downloading {SUPABASE_BUCKET}/{storage_key}: {e}")
+        raise
+
+    if not data:
+        raise RuntimeError(f"Supabase returned no data for {SUPABASE_BUCKET}/{storage_key}")
+    return data
 
 
 def build_manifest(skip_keys=frozenset(), limit=config.FETCH_LIMIT, max_raw_scan=config.MAX_RAW_SCAN):
@@ -137,11 +153,16 @@ def build_manifest(skip_keys=frozenset(), limit=config.FETCH_LIMIT, max_raw_scan
             break
 
         raw_scanned += 1
-        file_path = row["file_path"]
-        file_name = _file_name(file_path)
+        storage_key = row["storage_key"]
+        file_path = row["file_path"]  # legacy AWS URL: reference only, never downloaded
+        file_name = _file_name(storage_key)
 
-        # Skip if image name or path already processed
-        if file_name in skip_keys or file_path in skip_keys:
+        # Skip if the file name, storage_key, or legacy file_path was already processed
+        if (
+            file_name in skip_keys
+            or storage_key in skip_keys
+            or (file_path and file_path in skip_keys)
+        ):
             continue
 
         patient_id = row["patient_id"]
@@ -150,8 +171,9 @@ def build_manifest(skip_keys=frozenset(), limit=config.FETCH_LIMIT, max_raw_scan
         manifest.append({
             "folder_id": None,
             "folder_name": str(patient_id) if patient_id else "",
-            "file_id": file_path,          # URL used by download_image_bytes in memory
-            "file_path": file_path,
+            "file_id": storage_key,        # Supabase object path used by download_image_bytes
+            "storage_key": storage_key,    # authoritative path in the Supabase bucket
+            "file_path": file_path,        # legacy AWS URL, kept for reference only
             "file_name": file_name,
             "patient_id": patient_id,
             "visit_id": visit_id,

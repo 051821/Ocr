@@ -51,7 +51,8 @@ CRITICAL RULES:
 SECTION GUIDELINES:
 
 ### 📋 Patient Past History Summary (Date-Wise)
-- Present chronological visit progression (Date, Visit #, Chief Complaint, Provisional/Confirmed Dx).
+- Present chronological visit progression (Date, Visit # , Chief Complaint, Provisional/Confirmed Dx, kind of medicines given example antibiotic, antigastric etc on that particular visit date).
+- Give symmary of complete visit all together how trend changesover time of complaints and medicines.
 - Explicitly highlight any notable discrepancies (e.g. age/sex shifts across docs, diagnosis mismatches).
 
 ### 💊 Identified Medications, Purpose & Complaint Match

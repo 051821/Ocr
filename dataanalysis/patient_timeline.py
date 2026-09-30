@@ -49,7 +49,7 @@ def _format_document_block(doc, indent="    "):
 
     meds = doc.get("medications_found") or []
     if meds:
-        lines.append(f"{indent}Medications identified ({label}): {', '.join(meds)}")
+        lines.append(f"{indent}Medicines — from {label} (document, separate from prescription DB): {', '.join(meds)}")
 
     labs = doc.get("lab_results") or []
     if labs:
@@ -96,6 +96,18 @@ def _format_visit_block(visit, indent="  "):
     if vitals:
         v_str = ", ".join(f"{v['label']}: {v['value']}" for v in vitals)
         lines.append(f"{indent}Vitals (database): {v_str}")
+
+    rx_items = visit.get("db_medications") or []
+    if rx_items:
+        lines.append(f"{indent}Medicines — Prescription (database):")
+        for m in rx_items:
+            parts = [m.get("name", "Unknown")]
+            if m.get("dosage"):    parts.append(f"dosage {m['dosage']}")
+            if m.get("frequency"): parts.append(f"frequency {m['frequency']}")
+            if m.get("duration"):  parts.append(f"duration {m['duration']}")
+            lines.append(f"{indent}  • " + ", ".join(parts))
+    else:
+        lines.append(f"{indent}Medicines — Prescription (database): none recorded")
 
     if not visit.get("has_document"):
         lines.append(f"{indent}Supporting Document: NONE — "

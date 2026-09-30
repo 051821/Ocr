@@ -1169,14 +1169,19 @@ def fetch_patient_history(patient_id):
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT
+               SELECT
                     v.patient_id,
                     v.id AS vid,
                     de.id AS doc_id,
                     de.clean_text,
                     v.created_at,
                     v.chief_complaint,
+                    pi.medication_name,
+                    pi.dosage,
+                    pi.frequency,
+                    pi.duration,
                     pe.id AS prescription_id,
+                    
                     pe.provisional_diagnosis,
                     pe.confirmed_diagnosis,
                     pe.instructions,
@@ -1185,8 +1190,9 @@ def fetch_patient_history(patient_id):
                 FROM visit v
                 LEFT JOIN document_extraction de ON de.visit_id = v.id
                 LEFT JOIN prescription pe        ON pe.visit_id = v.id
+                LEFT JOIN prescriptionitem pi    ON pi.prescription_id = pe.id
                 WHERE v.patient_id::text = %s
-                ORDER BY v.created_at ASC NULLS LAST, de.id ASC, pe.id ASC
+                ORDER BY v.created_at ASC NULLS LAST, de.id ASC, pe.id ASC, pi.medication_name ASC
                 """,
                 (patient_id,),
             )
@@ -1195,6 +1201,7 @@ def fetch_patient_history(patient_id):
         visits = {}
 
         for (pid, vid, doc_id, clean_text, created_at, chief_complaint,
+             rx_med_name, rx_dosage, rx_frequency, rx_duration,
              prescription_id, prov_dx, conf_dx, instructions, pt_instructions,
              vitals_json) in rows:
 
@@ -1208,6 +1215,8 @@ def fetch_patient_history(patient_id):
                     "provisional_diagnosis": prov_dx,
                     "confirmed_diagnosis":  conf_dx,
                     "medications":          [],       # dedup'd prescription instruction strings
+                    "rx_items":             [],       # prescriptionitem rows (DATABASE medicines)
+                    "_seen_rx_items":       set(),
                     "vitals":               vitals_json,
                     "documents":            {},        # doc_id -> {doc_id, lines}
                     "_seen_prescriptions":  set(),
@@ -1234,6 +1243,24 @@ def fetch_patient_history(patient_id):
                 # No prescription row at all for this visit; nothing to add.
                 pass
 
+            # ---- DATABASE medicines: prescriptionitem rows only ----
+            # The join fans out (documents x items), so dedupe on the
+            # item's own content. Kept apart from document-extracted medicines.
+            if rx_med_name and str(rx_med_name).strip():
+                item_key = (prescription_id, str(rx_med_name).strip().lower(),
+                            str(rx_dosage or "").strip().lower(),
+                            str(rx_frequency or "").strip().lower(),
+                            str(rx_duration or "").strip().lower())
+                if item_key not in v["_seen_rx_items"]:
+                    v["_seen_rx_items"].add(item_key)
+                    v["rx_items"].append({
+                        "name":      str(rx_med_name).strip(),
+                        "dosage":    rx_dosage,
+                        "frequency": rx_frequency,
+                        "duration":  rx_duration,
+                        "source":    "Prescription (database)",
+                    })
+
             # Keep every distinct document separate — never merge two
             # documents' lines together, and never let a visit with no
             # document at all fall back on someone else's text.
@@ -1248,6 +1275,8 @@ def fetch_patient_history(patient_id):
 
         formatted = []
         all_meds = set()
+        all_db_meds = set()
+        all_doc_meds = set()
 
         for v in visits.values():
             # Stable order: by doc_id so "Document 1/2/3" is consistent.
@@ -1264,7 +1293,7 @@ def fetch_patient_history(patient_id):
 
             discrepancies = []
             documents_formatted = []
-            visit_ocr_meds = set()
+            visit_doc_meds = set()     # medicines extracted from documents ONLY
             visit_labs = []
 
             if has_document:
@@ -1292,7 +1321,7 @@ def fetch_patient_history(patient_id):
                             doc_meds.append(med["name"])
                     doc_meds = sorted(set(doc_meds))
 
-                    visit_ocr_meds.update(doc_meds)
+                    visit_doc_meds.update(doc_meds)
                     visit_labs.extend(doc_labs)
 
                     documents_formatted.append({
@@ -1334,10 +1363,14 @@ def fetch_patient_history(patient_id):
                                 except Exception:
                                     pass
 
-            for rx_str in v["medications"]:
-                visit_ocr_meds.update(extract_medications_from_text([rx_str]))
+            # Database medicines come ONLY from prescriptionitem; prescription
+            # instruction text is no longer mined for medicine names.
+            visit_db_meds = sorted({m["name"] for m in v["rx_items"]})
 
-            all_meds.update(visit_ocr_meds)
+            all_db_meds.update(visit_db_meds)
+            all_doc_meds.update(visit_doc_meds)
+            all_meds.update(visit_db_meds)
+            all_meds.update(visit_doc_meds)
 
             formatted.append({
                 "visit_id":             v["visit_id"],
@@ -1356,8 +1389,13 @@ def fetch_patient_history(patient_id):
                 "has_document":         has_document,
                 # One entry per distinct document, never merged together
                 "documents":            documents_formatted,
-                # Aggregated across DB + all this visit's own documents only
-                "medications_found":    sorted(visit_ocr_meds),
+                # Medicines kept in two separate lists (never merged):
+                #   db_medications       -> prescriptionitem rows (structured)
+                #   document_medications -> extracted from this visit's documents
+                "db_medications":       v["rx_items"],
+                "document_medications": sorted(visit_doc_meds),
+                # Combined names, only used for counts / side-effect lookup
+                "medications_found":    sorted(set(visit_db_meds) | visit_doc_meds),
                 "lab_results":          visit_labs,
                 "discrepancies":        discrepancies,
             })
@@ -1367,6 +1405,8 @@ def fetch_patient_history(patient_id):
             "total_visits":     len(formatted),
             "visits":           formatted,
             "all_medications":  sorted(all_meds),
+            "all_db_medications":       sorted(all_db_meds),
+            "all_document_medications": sorted(all_doc_meds),
             "possible_side_effects": get_possible_side_effects(sorted(all_meds)),
         }
 

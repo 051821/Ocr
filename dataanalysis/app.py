@@ -143,6 +143,21 @@ def medications_table(med_rows: list):
     st.dataframe(df, use_container_width=True, hide_index=True)
 
 
+def db_medications_table(rx_rows: list):
+    """Render medicines from the prescriptionitem table (database only)."""
+    if not rx_rows:
+        st.markdown("<span class='field-na'>No prescription items recorded in database.</span>",
+                    unsafe_allow_html=True)
+        return
+    rows = [{
+        "Medication": m.get("name", "—"),
+        "Dosage":     _nd(m.get("dosage"), "—"),
+        "Frequency":  _nd(m.get("frequency"), "—"),
+        "Duration":   _nd(m.get("duration"), "—"),
+    } for m in rx_rows]
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
 def lab_table(lab_rows: list):
     if not lab_rows:
         return
@@ -278,10 +293,11 @@ if patient_data["total_visits"] == 0:
 st.markdown("---")
 
 # KPI row
-k1, k2, k3 = st.columns(3)
+k1, k2, k3, k4 = st.columns(4)
 k1.metric("Patient ID", patient_data["patient_id"][:20] + "…")
 k2.metric("Total Visits", patient_data["total_visits"])
-k3.metric("Medications identified", len(patient_data.get("all_medications", [])))
+k3.metric("Medicines (Prescription DB)", len(patient_data.get("all_db_medications", [])))
+k4.metric("Medicines (Documents)", len(patient_data.get("all_document_medications", [])))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION 1: Date-wise visit cards
@@ -456,17 +472,9 @@ def render_visit_card(visit: dict, idx: int, total: int, expanded: bool):
                             unsafe_allow_html=True)
 
             st.write("")
-            st.markdown("<div class='section-label'>Medications Identified (this visit)</div>",
+            st.markdown("<div class='section-label'>💊 Medicines — Prescription (Database)</div>",
                         unsafe_allow_html=True)
-            meds_list = visit.get("medications_found", [])
-            if meds_list:
-                pills_html = " ".join(
-                    f'<span class="med-pill">{m}</span>' for m in meds_list
-                )
-                st.markdown(pills_html, unsafe_allow_html=True)
-            else:
-                st.markdown("<span class='field-na'>None identified.</span>",
-                            unsafe_allow_html=True)
+            db_medications_table(visit.get("db_medications", []))
 
         # ── RIGHT: Document(s) — kept fully separate, or a clear "none" notice ──
         with col_doc:
@@ -541,27 +549,17 @@ for i, v in enumerate(patient_data["visits"], start=1):
     pv    = v.get("db_provisional_dx") or _cs.get("clinical_impression") or _cs.get("provisional_diagnosis") or "—"
     cv    = v.get("db_confirmed_dx") or _cs.get("confirmed_diagnosis") or "—"
     cc    = v.get("db_chief_complaint") or _cs.get("chief_complaint") or "—"
-    mcs   = len(v.get("medications_found", []))
+    mrx   = len(v.get("db_medications", []))
+    mdoc  = len(v.get("document_medications", []))
     lbs   = len(v.get("lab_results", []))
     n_doc = len(docs)
     trajectory.append({
         "Visit #": f"V{i}", "Date": vd,
         "Chief Complaint": cc[:60] + ("…" if len(cc) > 60 else ""),
         "Provisional Dx": pv, "Confirmed Dx": cv,
-        "Docs": n_doc if n_doc else "None", "Meds": mcs, "Labs": lbs,
+        "Docs": n_doc if n_doc else "None", "Meds (Rx DB)": mrx, "Meds (Docs)": mdoc, "Labs": lbs,
     })
 st.dataframe(pd.DataFrame(trajectory), use_container_width=True, hide_index=True)
-
-# Medication history & side effects
-all_meds = patient_data.get("all_medications", [])
-if all_meds:
-    st.markdown("#### 💊 Medication History & General Side Effects Reference")
-    se = patient_data.get("possible_side_effects", {})
-    med_se_rows = [{"Medication": m, "General Potential Side Effects": se.get(m, "—")}
-                   for m in all_meds]
-    st.table(pd.DataFrame(med_se_rows))
-    st.caption("Side effect descriptions are general educational information, "
-               "not active patient symptoms.")
 
 # AI Analysis Note
 st.markdown("#### 🤖 AI Retrospective Clinical Analysis Note")

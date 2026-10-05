@@ -1153,14 +1153,6 @@ def _augment_with_ai_if_gaps(doc_lines, clinical_summary):
 
 def fetch_patient_history(patient_id):
     """
-    Fetch a patient's full visit history.
-
-    IMPORTANT: matches ONLY on v.patient_id (the visit's own patient_id).
-    Previously this also matched rows where de.patient_id equalled the
-    search id, which let a document_extraction row "leak" into a visit
-    it wasn't actually attached to whenever its own patient_id field
-    happened to match. Documents are always tied to a visit strictly via
-    de.visit_id = v.id, never guessed by patient_id alone.
     """
     patient_id = str(patient_id).strip()
     conn = db_pool.getconn()
@@ -1169,30 +1161,65 @@ def fetch_patient_history(patient_id):
         with conn.cursor() as cur:
             cur.execute(
                 """
-               SELECT
+                SELECT
                     v.patient_id,
                     v.id AS vid,
-                    de.id AS doc_id,
-                    de.clean_text,
                     v.created_at,
                     v.chief_complaint,
-                    pi.medication_name,
-                    pi.dosage,
-                    pi.frequency,
-                    pi.duration,
-                    pe.id AS prescription_id,
-                    
-                    pe.provisional_diagnosis,
-                    pe.confirmed_diagnosis,
-                    pe.instructions,
-                    pe.patient_instructions,
-                    v.vitals_json
+                    v.vitals_json,
+
+                    COALESCE(d.documents, '[]'::jsonb) AS documents,
+                    COALESCE(p.prescriptions, '[]'::jsonb) AS prescriptions
+
                 FROM visit v
-                LEFT JOIN document_extraction de ON de.visit_id = v.id
-                LEFT JOIN prescription pe        ON pe.visit_id = v.id
-                LEFT JOIN prescriptionitem pi    ON pi.prescription_id = pe.id
+
+                LEFT JOIN LATERAL (
+                    SELECT jsonb_agg(
+                        jsonb_build_object(
+                            'doc_id', de.id,
+                            'clean_text', de.clean_text
+                        )
+                        ORDER BY de.id
+                    ) AS documents
+                    FROM document_extraction de
+                    WHERE de.visit_id = v.id
+                ) d ON true
+
+                LEFT JOIN LATERAL (
+                    SELECT jsonb_agg(
+                        jsonb_build_object(
+                            'prescription_id', pe.id,
+                            'provisional_diagnosis', pe.provisional_diagnosis,
+                            'confirmed_diagnosis', pe.confirmed_diagnosis,
+                            'instructions', pe.instructions,
+                            'patient_instructions', pe.patient_instructions,
+                            'medications', COALESCE(m.medications, '[]'::jsonb)
+                        )
+                        ORDER BY pe.id
+                    ) AS prescriptions
+
+                    FROM prescription pe
+
+                    LEFT JOIN LATERAL (
+                        SELECT jsonb_agg(
+                            jsonb_build_object(
+                                'medication_name', pi.medication_name,
+                                'dosage', pi.dosage,
+                                'frequency', pi.frequency,
+                                'duration', pi.duration
+                            )
+                            ORDER BY pi.medication_name
+                        ) AS medications
+                        FROM prescriptionitem pi
+                        WHERE pi.prescription_id = pe.id
+                    ) m ON true
+
+                    WHERE pe.visit_id = v.id
+                ) p ON true
+
                 WHERE v.patient_id::text = %s
-                ORDER BY v.created_at ASC NULLS LAST, de.id ASC, pe.id ASC, pi.medication_name ASC
+
+                ORDER BY v.created_at ASC NULLS LAST;
                 """,
                 (patient_id,),
             )
@@ -1200,78 +1227,72 @@ def fetch_patient_history(patient_id):
 
         visits = {}
 
-        for (pid, vid, doc_id, clean_text, created_at, chief_complaint,
-             rx_med_name, rx_dosage, rx_frequency, rx_duration,
-             prescription_id, prov_dx, conf_dx, instructions, pt_instructions,
-             vitals_json) in rows:
+        for (pid, vid, created_at, chief_complaint, vitals_json,
+             documents_jsonb, prescriptions_jsonb) in rows:
 
             visit_id = str(vid)
 
-            if visit_id not in visits:
-                visits[visit_id] = {
-                    "visit_id":             visit_id,
-                    "visit_date":           created_at.isoformat() if created_at else None,
-                    "chief_complaint":      chief_complaint,
-                    "provisional_diagnosis": prov_dx,
-                    "confirmed_diagnosis":  conf_dx,
-                    "medications":          [],       # dedup'd prescription instruction strings
-                    "rx_items":             [],       # prescriptionitem rows (DATABASE medicines)
-                    "_seen_rx_items":       set(),
-                    "vitals":               vitals_json,
-                    "documents":            {},        # doc_id -> {doc_id, lines}
-                    "_seen_prescriptions":  set(),
-                }
+            # ---- build rx_items and medications from aggregated prescriptions ----
+            rx_items = []
+            seen_rx_items = set()
+            medications = []
+            seen_prescriptions = set()
+            prov_dx = conf_dx = None
 
-            v = visits[visit_id]
-            if chief_complaint and not v["chief_complaint"]:
-                v["chief_complaint"] = chief_complaint
-            if prov_dx and not v["provisional_diagnosis"]:
-                v["provisional_diagnosis"] = prov_dx
-            if conf_dx and not v["confirmed_diagnosis"]:
-                v["confirmed_diagnosis"] = conf_dx
+            for pe in (prescriptions_jsonb or []):
+                prescription_id = pe.get("prescription_id")
+                if prescription_id not in seen_prescriptions:
+                    seen_prescriptions.add(prescription_id)
+                    prov_dx = prov_dx or pe.get("provisional_diagnosis")
+                    conf_dx = conf_dx or pe.get("confirmed_diagnosis")
+                    for rx in (pe.get("instructions"), pe.get("patient_instructions")):
+                        if rx:
+                            s = normalize_medical_text(rx)
+                            if s and s not in medications:
+                                medications.append(s)
+                for med in (pe.get("medications") or []):
+                    med_name = med.get("medication_name")
+                    if med_name and str(med_name).strip():
+                        item_key = (prescription_id,
+                                    str(med_name).strip().lower(),
+                                    str(med.get("dosage") or "").strip().lower(),
+                                    str(med.get("frequency") or "").strip().lower(),
+                                    str(med.get("duration") or "").strip().lower())
+                        if item_key not in seen_rx_items:
+                            seen_rx_items.add(item_key)
+                            rx_items.append({
+                                "name":      str(med_name).strip(),
+                                "dosage":    med.get("dosage"),
+                                "frequency": med.get("frequency"),
+                                "duration":  med.get("duration"),
+                                "source":    "Prescription (database)",
+                            })
 
-            # Avoid re-adding the same prescription's instructions once per
-            # fanned-out row (join with multiple documents multiplies rows).
-            if prescription_id is not None and prescription_id not in v["_seen_prescriptions"]:
-                v["_seen_prescriptions"].add(prescription_id)
-                for rx in (instructions, pt_instructions):
-                    if rx:
-                        s = normalize_medical_text(rx)
-                        if s and s not in v["medications"]:
-                            v["medications"].append(s)
-            elif prescription_id is None and not v["_seen_prescriptions"]:
-                # No prescription row at all for this visit; nothing to add.
-                pass
+            # ---- build documents dict from aggregated documents ----
+            documents = {}
+            for doc in (documents_jsonb or []):
+                doc_id = doc.get("doc_id")
+                clean_text = doc.get("clean_text")
+                if doc_id is not None and clean_text:
+                    if doc_id not in documents:
+                        documents[doc_id] = {"doc_id": doc_id, "lines": []}
+                    doc_lines = documents[doc_id]["lines"]
+                    for line in normalize_medical_text(clean_text).splitlines():
+                        ls = line.strip()
+                        if ls and ls not in doc_lines:
+                            doc_lines.append(ls)
 
-            # ---- DATABASE medicines: prescriptionitem rows only ----
-            # The join fans out (documents x items), so dedupe on the
-            # item's own content. Kept apart from document-extracted medicines.
-            if rx_med_name and str(rx_med_name).strip():
-                item_key = (prescription_id, str(rx_med_name).strip().lower(),
-                            str(rx_dosage or "").strip().lower(),
-                            str(rx_frequency or "").strip().lower(),
-                            str(rx_duration or "").strip().lower())
-                if item_key not in v["_seen_rx_items"]:
-                    v["_seen_rx_items"].add(item_key)
-                    v["rx_items"].append({
-                        "name":      str(rx_med_name).strip(),
-                        "dosage":    rx_dosage,
-                        "frequency": rx_frequency,
-                        "duration":  rx_duration,
-                        "source":    "Prescription (database)",
-                    })
-
-            # Keep every distinct document separate — never merge two
-            # documents' lines together, and never let a visit with no
-            # document at all fall back on someone else's text.
-            if doc_id is not None and clean_text:
-                if doc_id not in v["documents"]:
-                    v["documents"][doc_id] = {"doc_id": doc_id, "lines": []}
-                doc_lines = v["documents"][doc_id]["lines"]
-                for line in normalize_medical_text(clean_text).splitlines():
-                    ls = line.strip()
-                    if ls and ls not in doc_lines:
-                        doc_lines.append(ls)
+            visits[visit_id] = {
+                "visit_id":              visit_id,
+                "visit_date":            created_at.isoformat() if created_at else None,
+                "chief_complaint":       chief_complaint,
+                "provisional_diagnosis": prov_dx,
+                "confirmed_diagnosis":   conf_dx,
+                "medications":           medications,
+                "rx_items":              rx_items,
+                "vitals":                vitals_json,
+                "documents":             documents,
+            }
 
         formatted = []
         all_meds = set()

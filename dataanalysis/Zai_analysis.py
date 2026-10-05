@@ -47,25 +47,37 @@ CRITICAL RULES:
 2. FORMATTING REQUIREMENTS:
    - Use clean Markdown tables for Medications, Vitals, and Lab Tests.
    - Keep summaries concise and well-organized.
+   - Label each visit explicitly as "Initial Visit" (Visit #1) or "Follow-Up #N" (subsequent visits).
 
 SECTION GUIDELINES:
 
 ### 📋 Patient Past History Summary (Date-Wise)
-- Present chronological visit progression (Date, Visit # , Chief Complaint, Provisional/Confirmed Dx, kind of medicines given example antibiotic, antigastric etc on that particular visit date).
-- Give symmary of complete visit all together how trend changesover time of complaints and medicines.
-- Explicitly highlight any notable discrepancies (e.g. age/sex shifts across docs, diagnosis mismatches).
+- For EVERY visit, show a row with: Visit # | Type (Initial / Follow-Up #N) | Date | Chief Complaint | Provisional/Confirmed Dx | Medicines class given (e.g. antihistamine, topical steroid, antibiotic).
+- After the table, write a 3–5 sentence narrative summarising the overall treatment trend and how complaints evolved across visits.
+- Explicitly call out any notable discrepancies (diagnosis shifts, age/sex mismatches across documents, vital value conflicts).
 
 ### 💊 Identified Medications, Purpose & Complaint Match
 Present a Markdown Table with these exact columns:
-| Medication | Source (Rx DB / Document) | Primary Purpose / Indication | Matches Chief Complaint? | General Potential Side Effects (Reference Only) |
+| Medication | Source (Rx DB / Document) | Drug Class | Primary Purpose / Indication | Matches Chief Complaint? | General Potential Side Effects (Reference Only) |
 
 ### 📈 Date-Wise Vitals & Clinical Trend Analysis
-- Markdown Table for vitals over visit dates (Date | BP | SpO2 | Pulse | Temp | Weight).
-- Concise bullet points highlighting overall clinical trends (e.g. BP trend, weight changes).
+- Markdown Table for vitals over visit dates (Date | Visit Type | BP | SpO₂ | Pulse | Temp | Weight).
+- After the table, bullet points for:
+  • Each vital's trend (stable / worsening / improving / concerning single reading).
+  • Flag any single reading outside normal range with the specific value.
 
 ### 🧪 Laboratory Test Evaluation (Normal vs Abnormal)
 Present a Markdown Table with columns:
 | Test Name | Result | Reference Range | Status (NORMAL / ABNORMAL) | Clinical Context |
+If no labs: state clearly "No laboratory investigations documented."
+
+### 🔮 Clinical Condition Trajectory & Outlook (Retrospective Pattern Only)
+Based ONLY on the documented visit data above, describe:
+- Whether the primary condition appears to be improving, stable, or recurring based on visit frequency and complaint pattern.
+- Whether medication escalation or de-escalation is observable over time (e.g. systemic steroid added then removed).
+- Any patterns suggesting the condition is chronic vs acute resolution.
+- What follow-up gaps (long intervals between visits) suggest about the patient's engagement or condition stability.
+- End with: "⚠️ This is a retrospective pattern observation only — not a clinical prediction or medical advice."
 
 ### 🥗 General Lifestyle & Everyday Diet Suggestions (Not Medical Advice)
 - Concise bullet points grouped by condition (e.g. HTN, T2DM, Eczema, GI).

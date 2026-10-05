@@ -419,7 +419,7 @@ def render_document_section(doc: dict, db_cc, db_prov, db_conf, show_label=True)
                 st.info("Extraction quality: **Low** — no structured fields found.")
 
 
-def render_visit_card(visit: dict, idx: int, total: int, expanded: bool):
+def render_visit_card(visit: dict, idx: int, total: int, expanded: bool, prev_visit: dict = None):
     v_date = (visit["visit_date"] or "")
     date_disp = v_date[:10] if len(v_date) >= 10 else "Date unspecified"
     v_id_short = visit["visit_id"][:8]
@@ -431,10 +431,42 @@ def render_visit_card(visit: dict, idx: int, total: int, expanded: bool):
     first_doc_imp = documents[0]["clinical_summary"].get("clinical_impression") if documents else None
     headline_dx = db_conf or db_prov or first_doc_imp or "Diagnosis not documented"
 
+    # Determine visit type
+    if idx == 1:
+        visit_type_label = "🟢 Initial Visit"
+    else:
+        visit_type_label = f"🔄 Follow-Up #{idx - 1}"
+
+    # Calculate days since last visit
+    days_since = ""
+    if prev_visit and prev_visit.get("visit_date") and v_date:
+        try:
+            from datetime import datetime
+            prev_dt = datetime.fromisoformat(prev_visit["visit_date"][:10])
+            curr_dt = datetime.fromisoformat(v_date[:10])
+            delta = (curr_dt - prev_dt).days
+            if delta > 0:
+                days_since = f"  ·  ⏱ {delta}d since last visit"
+        except Exception:
+            pass
+
     with st.expander(
-        f"📅 Visit #{idx}  ·  {date_disp}  ·  {headline_dx}  ·  ID: {v_id_short}…",
+        f"{visit_type_label}  ·  Visit #{idx}  ·  {date_disp}{days_since}  ·  {headline_dx}  ·  ID: {v_id_short}…",
         expanded=expanded,
     ):
+        # Visit type badge
+        if idx == 1:
+            st.success(f"**Initial Visit** — First documented encounter for this patient.")
+        else:
+            prev_cc = (prev_visit or {}).get("db_chief_complaint", "")
+            curr_cc = db_cc or ""
+            if prev_cc and curr_cc and prev_cc.strip().lower() == curr_cc.strip().lower():
+                st.info(f"**Follow-Up #{idx - 1}** — Same complaint as previous visit: *{curr_cc}*{days_since}")
+            elif prev_cc and curr_cc:
+                st.warning(f"**Follow-Up #{idx - 1}** — Complaint changed: *{prev_cc}* → *{curr_cc}*{days_since}")
+            else:
+                st.info(f"**Follow-Up #{idx - 1}**{days_since}")
+
         for disc in visit.get("discrepancies", []):
             render_discrepancy(disc)
 
@@ -525,13 +557,16 @@ for _visit in patient_data["visits"]:
 
 _running_idx = 0
 _total_visits = len(patient_data["visits"])
+_prev_visit = None
 for _date_label, _visits_on_date in _date_groups:
     if len(_visits_on_date) > 1:
         st.markdown(f"#### 🗓️ {_date_label} — {len(_visits_on_date)} visits recorded")
     for _v in _visits_on_date:
         _running_idx += 1
         render_visit_card(_v, _running_idx, _total_visits,
-                           expanded=(_running_idx == _total_visits))
+                           expanded=(_running_idx == _total_visits),
+                           prev_visit=_prev_visit)
+        _prev_visit = _v
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION 2: Quick Executive Summary
@@ -542,6 +577,7 @@ st.markdown("## 📌 Quick Clinical & Longitudinal Executive Summary")
 # Trajectory table
 st.markdown("#### 📈 Visit Trajectory Overview")
 trajectory = []
+_prev_vdate = None
 for i, v in enumerate(patient_data["visits"], start=1):
     vd    = (v.get("visit_date") or "")[:10] or "—"
     docs  = v.get("documents") or []
@@ -553,9 +589,18 @@ for i, v in enumerate(patient_data["visits"], start=1):
     mdoc  = len(v.get("document_medications", []))
     lbs   = len(v.get("lab_results", []))
     n_doc = len(docs)
+    vtype = "Initial" if i == 1 else f"Follow-Up #{i-1}"
+    days_gap = "—"
+    if _prev_vdate and vd != "—":
+        try:
+            from datetime import datetime as _dt
+            days_gap = f"{(_dt.fromisoformat(vd) - _dt.fromisoformat(_prev_vdate)).days}d"
+        except Exception:
+            pass
+    _prev_vdate = vd if vd != "—" else _prev_vdate
     trajectory.append({
-        "Visit #": f"V{i}", "Date": vd,
-        "Chief Complaint": cc[:60] + ("…" if len(cc) > 60 else ""),
+        "Visit #": f"V{i}", "Type": vtype, "Date": vd, "Gap": days_gap,
+        "Chief Complaint": cc[:50] + ("…" if len(cc) > 50 else ""),
         "Provisional Dx": pv, "Confirmed Dx": cv,
         "Docs": n_doc if n_doc else "None", "Meds (Rx DB)": mrx, "Meds (Docs)": mdoc, "Labs": lbs,
     })

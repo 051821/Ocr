@@ -1193,7 +1193,8 @@ def fetch_patient_history(patient_id):
                             'confirmed_diagnosis', pe.confirmed_diagnosis,
                             'instructions', pe.instructions,
                             'patient_instructions', pe.patient_instructions,
-                            'medications', COALESCE(m.medications, '[]'::jsonb)
+                            'medications', COALESCE(m.medications, '[]'::jsonb),
+                            'followups', COALESCE(f.followups, '[]'::jsonb)
                         )
                         ORDER BY pe.id
                     ) AS prescriptions
@@ -1213,6 +1214,22 @@ def fetch_patient_history(patient_id):
                         FROM prescriptionitem pi
                         WHERE pi.prescription_id = pe.id
                     ) m ON true
+
+                    LEFT JOIN LATERAL (
+                        SELECT jsonb_agg(
+                            jsonb_build_object(
+                                'scheduled_date', fs.scheduled_date,
+                                'status', fs.status,
+                                'sequence_no', fs.sequence_no,
+                                'resolution', fs.resolution,
+                                'resolution_notes', fs.resolution_notes,
+                                'is_emergency', fs.is_emergency
+                            )
+                            ORDER BY fs.scheduled_date ASC
+                        ) AS followups
+                        FROM followup_schedule fs
+                        WHERE fs.source_prescription_id = pe.id
+                    ) f ON true
 
                     WHERE pe.visit_id = v.id
                 ) p ON true
@@ -1238,6 +1255,8 @@ def fetch_patient_history(patient_id):
             medications = []
             seen_prescriptions = set()
             prov_dx = conf_dx = None
+            followups = []
+            seen_followup_keys = set()
 
             for pe in (prescriptions_jsonb or []):
                 prescription_id = pe.get("prescription_id")
@@ -1250,6 +1269,19 @@ def fetch_patient_history(patient_id):
                             s = normalize_medical_text(rx)
                             if s and s not in medications:
                                 medications.append(s)
+                    # collect follow-ups for this prescription
+                    for fu in (pe.get("followups") or []):
+                        fkey = (str(fu.get("scheduled_date", "")), str(fu.get("sequence_no", "")))
+                        if fkey not in seen_followup_keys:
+                            seen_followup_keys.add(fkey)
+                            followups.append({
+                                "scheduled_date":  str(fu.get("scheduled_date", "")),
+                                "status":          fu.get("status", ""),
+                                "sequence_no":     fu.get("sequence_no"),
+                                "resolution":      fu.get("resolution"),
+                                "resolution_notes":fu.get("resolution_notes"),
+                                "is_emergency":    fu.get("is_emergency", False),
+                            })
                 for med in (pe.get("medications") or []):
                     med_name = med.get("medication_name")
                     if med_name and str(med_name).strip():
@@ -1292,6 +1324,7 @@ def fetch_patient_history(patient_id):
                 "rx_items":              rx_items,
                 "vitals":                vitals_json,
                 "documents":             documents,
+                "followups":             followups,
             }
 
         formatted = []
@@ -1399,26 +1432,20 @@ def fetch_patient_history(patient_id):
                 "chief_complaint":      v["chief_complaint"] or (documents_formatted[0]["clinical_summary"].get("chief_complaint") if documents_formatted else None),
                 "provisional_diagnosis": v["provisional_diagnosis"] or (documents_formatted[0]["clinical_summary"].get("provisional_diagnosis") or documents_formatted[0]["clinical_summary"].get("clinical_impression") if documents_formatted else None),
                 "confirmed_diagnosis":  v["confirmed_diagnosis"] or (documents_formatted[0]["clinical_summary"].get("confirmed_diagnosis") if documents_formatted else None),
-                # Structured DB fields (always trustworthy, always shown)
                 "db_chief_complaint":   v["chief_complaint"],
                 "db_provisional_dx":    v["provisional_diagnosis"],
                 "db_confirmed_dx":      v["confirmed_diagnosis"],
                 "db_instructions":      v["medications"],
                 "db_vitals_rows":       db_vital_rows,
                 "db_vitals_json":       db_vitals_json,
-                # Whether ANY document exists for this visit at all
                 "has_document":         has_document,
-                # One entry per distinct document, never merged together
                 "documents":            documents_formatted,
-                # Medicines kept in two separate lists (never merged):
-                #   db_medications       -> prescriptionitem rows (structured)
-                #   document_medications -> extracted from this visit's documents
                 "db_medications":       v["rx_items"],
                 "document_medications": sorted(visit_doc_meds),
-                # Combined names, only used for counts / side-effect lookup
                 "medications_found":    sorted(set(visit_db_meds) | visit_doc_meds),
                 "lab_results":          visit_labs,
                 "discrepancies":        discrepancies,
+                "followups":            v.get("followups", []),
             })
 
         return {

@@ -125,6 +125,18 @@ def _format_visit_block(visit, indent="  "):
         for d in discrepancies:
             lines.append(f"{indent}  ⚠ {d}")
 
+    followups = visit.get("followups") or []
+    if followups:
+        statuses = [fu.get("status", "") for fu in followups]
+        completed = statuses.count("COMPLETED")
+        missed    = statuses.count("MISSED")
+        lines.append(f"{indent}Follow-up Schedule ({len(followups)} scheduled | {completed} completed | {missed} missed):")
+        for fu in followups:
+            emerg = " 🚨 EMERGENCY" if fu.get("is_emergency") else ""
+            res   = f" → {fu['resolution']}" if fu.get("resolution") else ""
+            note  = f" [{fu['resolution_notes']}]" if fu.get("resolution_notes") else ""
+            lines.append(f"{indent}  • {fu.get('scheduled_date','?')} | {fu.get('status','?')}{emerg}{res}{note}")
+
     return lines
 
 

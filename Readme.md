@@ -1,160 +1,74 @@
-# OCR Pipeline
+# Complete Architecture: Two-Stage System Pipeline
 
-Fetches medical-document images from Drive, classifies each as printed or
-handwritten with CLIP, routes printed images to PaddleOCR and handwritten
-images to an EC2-hosted vLLM model, and merges both results into a CSV.
+This system consists of two independent pipelines:
+1. **Pipeline 1: Document Processing & Extraction Pipeline (`/`)** — Ingests raw clinical images, classifies them, extracts text/data via OCR, and writes structured records into PostgreSQL.
+2. **Pipeline 2: Clinical Retrospective & Analytics Pipeline (`/dataanalysis`)** — Aggregates patient longitudinal history from PostgreSQL, optimizes AI usage using deterministic hashing & cache/delta logic, and serves a Streamlit dashboard.
 
-```
-data/data_fetcher.py   -> pull a limited, resumable batch (Drive today, swappable later)
-        |
-        v
-main.py (STAGE 1)      -> CLIP classify -> output/filter.json
-        |
-        +---------------------------+
-        v                           v
-model/paddel.py             model/handwritten.py
-(printed)                   (handwritten, via EC2)
-        |                           |
-        v                           v
-      The extracted text is then filtered as clean text, patient imformtion and passed onto database tabledocument_extraction;  with other column 
-                              |
-                              |
-                              v
-                  then get clean text, visit dates from visit table linked via id  and cheif complaint from the database and perform A ai analysis
+---
 
-```
+## 1. Flowchart: Pipeline 1 (Ingestion, Classification & OCR)
 
-## Why three separate preprocessing modules
-
-`preprocessing/clip_preprocessing.py`, `printed_preprocessing.py`, and
-`handwritten_preprocessing.py` are deliberately not shared code. Each model
-stage resizes and formats the image differently, and each has its own
-confidence thresholds in `config.py`:
-
-| Stage | Max dimension | Threshold(s) | Why different |
-|---|---|---|---|
-| CLIP classifier | 2000px (source), tiled 3x2 | `HANDWRITTEN_THRESHOLD=0.65`, tile-vote ratio `0.75`, structural table override | Tile-vote based; a printed form with handwritten fill-ins should still classify as printed |
-| PaddleOCR (printed) | 2000px | `PADDLE_CONFIDENCE_THRESHOLD=0.5` (`0.35` for long text) | OCR recognition score, not a classification probability |
-| Handwritten (EC2 vLLM) | 720px | none (retry/timeout instead) | VLM has no per-token confidence score to gate on; size cap is about latency/cost, not accuracy |
-
-Never reuse one stage's threshold for another -- they measure different
-things on differently-sized images.
-
-## Setup
-
-```bash
-cp .env.example .env   # fill in DRIVE_API_KEY, DRIVE_ROOT_FOLDER_ID, etc.
-pip install -r requirements.txt --break-system-packages
-# then install the GPU build of paddlepaddle for your CUDA version -- see
-# the comment at the top of requirements.txt. Do not install the CPU wheel.
+```mermaid
+flowchart TD
+    Start([Run main.py]) --> Stage0[Stage 0: Batch Ingestion<br/>data_fetcher.fetch_batch]
+    Stage0 --> PreFilter{Cached in filter.json?}
+    
+    PreFilter -- "Yes" --> CachedItems[Split by Cache Status]
+    PreFilter -- "No" --> Download[Prefetch Images via ThreadPool]
+    
+    Download --> Stage1[Stage 1: CLIP & CV Classification<br/>classify_batch]
+    Stage1 --> DocCheck{Is Document?}
+    
+    DocCheck -- "No" --> Exclude[Exclude non-clinical images]
+    DocCheck -- "Yes" --> ClassifyType{Handwritten or Printed?}
+    
+    CachedItems --> SplitCombine[Combine Filtered Batches]
+    ClassifyType --> SplitCombine
+    
+    SplitCombine -- "Printed Documents" --> Stage2[Stage 2: Mistral OCR<br/>run_printed_ocr]
+    SplitCombine -- "Handwritten Documents" --> Stage3[Stage 3: EC2 Inference<br/>start_ec2_instance<br/>run_handwritten_ocr<br/>stop_ec2_instance]
+    
+    Stage2 --> DBWrite[(PostgreSQL Database<br/>visit, document_extraction, prescription)]
+    Stage3 --> DBWrite
 ```
 
-## Run
+---
 
-```bash
-python main.py
+## 2. Flowchart: Pipeline 2 (Clinical Analysis, CSV Cache & Dashboard)
+
+```mermaid
+flowchart TD
+    StartDash([User Enters Patient ID in Dashboard]) --> FetchDB[Fetch Patient History from DB<br/>analysis.fetch_patient_history<br/>LEFT JOIN LATERAL]
+    FetchDB --> Hash[Compute SHA-256 Hash<br/>compute_source_hash]
+    Hash --> CheckCSV{Check patient record in CSV<br/>get_patient_row}
+
+    %% Case 1: First time analysis
+    CheckCSV -- "No Record Found" --> FullRun1[Run Full AI Retrospective Analysis<br/>analyze_patient_with_ai]
+    FullRun1 --> SaveNew[Insert Row in CSV<br/>mismatch_count = 0]
+    SaveNew --> Render([Display Dashboard])
+
+    %% Case 2: Unchanged cache hit
+    CheckCSV -- "Record Exists" --> CompareHash{Current Hash == Stored Hash?}
+    CompareHash -- "YES (Data Unchanged)" --> CacheHit[Load Cached Analysis from CSV<br/>Zero LLM Calls]
+    CacheHit --> Render
+
+    %% Case 3: Incremental vs Full re-run
+    CompareHash -- "NO (Data Changed)" --> CheckThreshold{mismatch_count >= 4?}
+    
+    CheckThreshold -- "NO (< 4)" --> IncRun[Run Incremental AI Analysis<br/>Old Summary + New Visits Only<br/>analyze_patient_incremental]
+    IncRun --> SaveInc[Update Row in CSV<br/>mismatch_count += 1]
+    SaveInc --> Render
+
+    CheckThreshold -- "YES (>= 4)" --> FullRun2[Run Full AI Analysis across All Visits<br/>analyze_patient_with_ai]
+    FullRun2 --> SaveFull[Update Row in CSV<br/>mismatch_count = 0]
+    SaveFull --> Render
 ```
 
-Resumable: images already present in `output/output.json` or
-`output/result.json` are skipped by `data/data_fetcher.load_skip_keys()`
-before anything is even downloaded. `output/filter.json` caches CLIP
-decisions per image, keyed to a fingerprint of the current thresholds --
-change any threshold in `config.py` and affected images get reclassified
-automatically.
+---
 
-## 
+## Module Overview
 
-Two ways to run it:
-
-1. **Manual (default)** -- open your own SSH tunnel to the instance, leave
-   `AUTO_MANAGE_EC2=false` in `.env`, and `main.py` just calls the endpoint.
-   ```bash
-   ssh -i "path/to/handwritten.pem" -N -L 8000:127.0.0.1:8000 ec2-user@<ip>
-   ```
-2. **Automatic** -- set `AUTO_MANAGE_EC2=true` and `EC2_INSTANCE_ID` in
-   `.env`. `main.py` will start the instance, poll `/health` until the model
-   server is up, run the handwritten batch, and stop the instance again
-   when done (`model/load_model.start_ec2_instance` / `stop_ec2_instance`).
-
-## Future work (not yet implemented, hooks left in place)
-
-- **Swap data source**: `config.DATA_SOURCE` and `data/data_fetcher.build_manifest`
-  already branch on it; add a `local`/`s3` implementation there.
-- **Patient visit timeline**: once `final_report.csv` has multiple rows per
-  patient folder, group by `folder` and flag folders with 3-4+ visits for a
-  timeline/analysis view. Not built yet -- needs a "visit" concept the current
-  JSON schema doesn't capture (currently one row per image, not per visit).
-- **Streamlit dashboard**: Ai analysis for the patient 
-- **Full agent/rule-based orchestration**: `main.py` already runs stages 1-4
-  in order and auto start/stops EC2 around stage 3 when `AUTO_MANAGE_EC2=true`.
-  Turning this into an agent-driven or fully rule-based scheduler (e.g. cron,
-  Airflow, or an LLM-agent loop) is the next step, not implemented here.
-- **CSV merge rules**: 
-
-## Constraints 
-
-- Images already in `output.json`/`result.json` are never re-downloaded or
-  re-run (`data_fetcher.load_skip_keys`).
-- JSON output shape is `{folder: {image: [...]}}` everywhere (`output.json`,
-  `result.json`, `filter.json`).
-- PaddleOCR runs GPU-only (`config.PADDLE_DEVICE`, GPU-only wheel noted in
-  `requirements.txt`).
-
-
-
-1. fetch assigned limited data from the data source /data folder  currently from drive 
-2. Then i have to pass it with classification model clip then generate filter.json
-3. I have two diff model see classification then run for printed first through paddel and save to output.json.
-4. once paddel is done then i have handwritten model in ec2 it will  give an output to start ec2 model or it will start ec2 model pass handwritten images to it and generate 
-5. After that all the info will be written in a database as patient medical history imformation.
-6. future work 
- -- I can change data source 
- -- use table to see patient visit if more then 3-4 visit will create a analysis and time line based represention of patient condition
- -- can add simple streamlit dashboard to see result based on perticular patient id
- -- connect everything in pipeline via agents or simple rule based and automettically turning on the ec2 run save in result.json then turning   in off
-
-7. constraint
-   -- skip images which is already present in output.json or result.json
-   -- json structure 
-   {
-    foldername{
-        image1{....},
-        image2{.....}, // ocr
-    }
-    folder2{
-        ...
-    }
-   }
-   -- run downloaded model like paddelocr on gpu , pip install only gpu version
-   
-
-
-
-ssh -i "C:\Users\91739\Downloads\handwritten.pem" -N -L 8000:127.0.0.1:8000 ec2-user@13.49.196.35   
-
-
-
-
-
-### ling prompt 
-
-Analyze the supplied structured patient timeline.
-
-Use ONLY information contained in the timeline.
-
-Your task is clinical interpretation, not diagnosis or treatment.
-
-Rules:
-1. Do not invent diagnoses, symptoms, medications, laboratory values,
-   trends, causes, or clinical events.
-2. Do not infer a trend unless multiple measurements at different dates
-   support that trend.
-3. "First documented" does not mean newly diagnosed.
-4. "Documented at one visit" does not mean discontinued.
-5. Preserve laboratory values, units, dates, and reference ranges exactly.
-6. Distinguish observed findings from clinical interpretation.
-7. Identify clinically meaningful abnormalities and temporal patterns.
-8. Explicitly state when the available record is insufficient to determine
-   something.
-9. Do not prescribe, modify, start, or stop medication.
-10. Every clinically meaningful claim must reference one or more event IDs.
+| Pipeline | Main Directory | Key Files | Function |
+| :--- | :--- | :--- | :--- |
+| **1. OCR Extraction** | Root (`/`) | `main.py`, `data/data_fetcher.py`, `preprocessing/clip_preprocessing.py`, `model/mistral_printed.py`, `model/handwritten.py` | Ingests images, filters non-documents, routes printed/handwritten to OCR engines, and stores extracted text in PostgreSQL. |
+| **2. Analytics & Storage** | `dataanalysis/` | `analysis.py`, `Zai_analysis.py`, `storage/ai_analysis_csv.py`, `csv_dashboard.py` | Fetches consolidated visit history, tracks changes with SHA-256 hashes, maintains token-efficient CSV cache/upserts, and renders interactive dashboard. |

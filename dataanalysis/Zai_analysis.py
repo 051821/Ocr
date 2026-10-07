@@ -77,6 +77,7 @@ Based ONLY on the documented visit data above, describe:
 - Whether medication escalation or de-escalation is observable over time (e.g. systemic steroid added then removed).
 - Any patterns suggesting the condition is chronic vs acute resolution.
 - What follow-up gaps (long intervals between visits) suggest about the patient's engagement or condition stability.
+- **Follow-up Adherence:** Using the Follow-up Schedule data, state the overall adherence rate (X of Y completed), call out any MISSED follow-ups by date, note if any were emergencies, and interpret what missed follow-ups may indicate about the condition.
 - End with: "⚠️ This is a retrospective pattern observation only — not a clinical prediction or medical advice."
 
 ### 🥗 General Lifestyle & Everyday Diet Suggestions (Not Medical Advice)
@@ -90,11 +91,61 @@ PATIENT TIMELINE DATA:
     return prompt
 
 
+def build_incremental_prompt(old_analysis_markdown: str, patient_data: dict, prev_visit_count: int) -> str:
+    """
+    Lightweight prompt used when hash changed but mismatch_count < FULL_RERUN_THRESHOLD.
+    Feeds the old analysis summary + only the new visits' timeline to the model.
+    Much shorter than a full re-analysis prompt.
+    """
+    from patient_timeline import create_patient_timeline
+
+    all_visits  = patient_data.get("visits", [])
+    new_visits  = all_visits[prev_visit_count:]          # only visits added since last run
+    new_count   = len(new_visits)
+    total_count = len(all_visits)
+
+    # Build a mini patient_data containing only the new visits for timeline
+    mini_data = dict(patient_data)
+    mini_data["visits"] = new_visits
+    mini_data["total_visits"] = new_count
+    new_timeline = create_patient_timeline(mini_data)
+
+    return f"""
+You are a clinical documentation AI. An existing retrospective analysis exists for this patient
+({total_count - new_count} visits previously analysed). {new_count} new visit(s) have been added.
+
+TASK: Update the existing analysis below to reflect the new visits. Keep all unchanged sections
+as-is. Only revise sections where the new visit data changes the picture
+(trajectory, medications, vitals trend, labs, discrepancies, outlook).
+
+EXISTING ANALYSIS:
+{old_analysis_markdown}
+
+NEW VISIT(S) TIMELINE ({new_count} visit(s), visit #{total_count - new_count + 1}–{total_count}):
+{new_timeline}
+
+Return the complete updated analysis in the same Markdown format.
+⚠️ Retrospective data summary only — no medical advice.
+""".strip()
+
+
 # ============================================================
 # Main Patient Analysis
 # ============================================================
 
 def analyze_patient_with_ai(patient_data):
+    """
+    Run retrospective clinical analysis via AI.
+
+    Returns a dict:
+        {
+            "raw_markdown": str,          # Markdown text for dashboard display
+            "model_name":   str,          # model that produced the output
+            "model_version": str,         # empty string – OpenRouter doesn't expose this
+        }
+
+    Callers that previously expected a plain string should use result["raw_markdown"].
+    """
 
     # --------------------------------------------------------
     # 1. Try structured longitudinal analysis first
@@ -104,7 +155,12 @@ def analyze_patient_with_ai(patient_data):
         try:
             visits = adapt_from_simple_history(patient_data)
             analysis_payload = run_longitudinal_analysis(visits)
-            return generate_longitudinal_report(analysis_payload)
+            report_text = generate_longitudinal_report(analysis_payload)
+            return {
+                "raw_markdown":  report_text,
+                "model_name":    "longitudinal_engine",
+                "model_version": "",
+            }
         except Exception as e:
             print(f"Structured longitudinal analysis failed: {e}")
             print("Falling back to OpenRouter AI models...")
@@ -144,14 +200,57 @@ def analyze_patient_with_ai(patient_data):
 
             choices = result.get("choices", [])
             if choices and choices[0].get("message", {}).get("content"):
-                return choices[0]["message"]["content"]
+                markdown_text = choices[0]["message"]["content"]
+                return {
+                    "raw_markdown":  markdown_text,
+                    "model_name":    model,
+                    "model_version": "",   # OpenRouter does not expose version strings
+                }
 
         except Exception as e:
-
-
-            
             print(f"[Zai_analysis] Model '{model}' failed: {e}")
             last_exception = e
             continue
 
     raise RuntimeError(f"AI analysis failed across all models. Last error: {last_exception}")
+
+
+# ============================================================
+# Shared OpenRouter caller
+# ============================================================
+
+def _call_openrouter(prompt: str) -> dict:
+    """Call OpenRouter with fallback models. Returns same dict as analyze_patient_with_ai."""
+    models_to_try = [PRIMARY_MODEL] + FALLBACK_MODELS
+    last_exception = None
+    for model in models_to_try:
+        try:
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.2,
+            }
+            if "ling" in model:
+                payload["reasoning"] = {"enabled": True}
+            resp = requests.post(OPENROUTER_URL, headers=HEADERS, json=payload, timeout=60)
+            resp.raise_for_status()
+            choices = resp.json().get("choices", [])
+            if choices and choices[0].get("message", {}).get("content"):
+                return {
+                    "raw_markdown":  choices[0]["message"]["content"],
+                    "model_name":    model,
+                    "model_version": "",
+                }
+        except Exception as e:
+            print(f"[Zai_analysis] Model '{model}' failed: {e}")
+            last_exception = e
+    raise RuntimeError(f"All models failed. Last: {last_exception}")
+
+
+def analyze_patient_incremental(old_markdown: str, patient_data: dict, prev_visit_count: int) -> dict:
+    """
+    Lightweight update: send old analysis summary + new visits only.
+    Used when hash changed but mismatch_count < FULL_RERUN_THRESHOLD.
+    """
+    prompt = build_incremental_prompt(old_markdown, patient_data, prev_visit_count)
+    return _call_openrouter(prompt)

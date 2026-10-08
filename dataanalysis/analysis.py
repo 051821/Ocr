@@ -11,7 +11,10 @@ from database import db_pool
 
 try:
     import requests
-    from config import OPENROUTER_API_KEY
+    try:
+        from config import OPENROUTER_API_KEY
+    except Exception:
+        OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
     _AI_FALLBACK_AVAILABLE = bool(OPENROUTER_API_KEY)
 except Exception:
     _AI_FALLBACK_AVAILABLE = False
@@ -688,15 +691,16 @@ def _ai_lookup_side_effects(unmatched_meds):
 
     med_list_str = "\n".join(f"- {m}" for m in unmatched_meds)
     prompt = (
-        "For each medicine name below, give its well-established, widely "
-        "documented general side effects (a short comma-separated list, "
-        "under 20 words). This is for a patient-facing educational reference "
+        "For each medicine name below, identify the medicine (including "
+        "recognized brand names) and give a short list of its well-established "
+        "common side effects. Keep each value under 20 words. This is for a "
+        "patient-facing educational reference "
         "panel, NOT dosing or treatment advice — do not suggest starting, "
         "stopping, or changing any medication. "
-        "If a name is not a recognizable medicine (e.g. it looks like a lab "
-        "test, a food, or garbled OCR text), set its value to null instead "
-        "of guessing. Only use widely known, general information — never "
-        "invent specifics.\n"
+        "If the name is ambiguous, not a recognizable medicine, or OCR is "
+        "too garbled to identify confidently, set its value to null instead "
+        "of guessing. Do not infer an ingredient from a partial brand name. "
+        "Only use widely known, general information — never invent specifics.\n"
         "Return ONLY minified JSON mapping each name (exactly as given) to "
         "either a short side-effects string or null. Example:\n"
         '{"Paracetamol": "Rare skin rash, liver toxicity in excessive doses.", '
@@ -717,9 +721,15 @@ def _ai_lookup_side_effects(unmatched_meds):
         content = resp.json()["choices"][0]["message"]["content"].strip()
         content = re.sub(r"^```(?:json)?|```$", "", content, flags=re.M).strip()
         data = json.loads(content)
+        if not isinstance(data, dict):
+            return {}
+        # Match keys case-insensitively because model responses may change
+        # capitalization even when the requested names are preserved.
+        returned = {str(k).strip().casefold(): v for k, v in data.items()}
         return {
-            name: f"{text.strip().rstrip('.')} (AI-assisted general reference — verify before relying on it)."
-            for name, text in data.items()
+            name: f"{returned[name.casefold()].strip().rstrip('.')} (AI-assisted general reference; verify with a pharmacist or clinician)."
+            for name in unmatched_meds
+            for text in [returned.get(name.casefold())]
             if isinstance(text, str) and text.strip()
         }
     except Exception as e:
@@ -743,12 +753,16 @@ def get_possible_side_effects(medication_list):
         else:
             unmatched.append(med)
 
-    # For medicines we don't recognize locally ("unseen" medicines), try an
-    # AI-assisted lookup rather than reusing one generic line for every drug.
+    # For locally unknown names, ask the model dynamically. A null or failed
+    # lookup remains explicit; it must never be presented as a drug-specific
+    # side-effect profile.
     if unmatched:
         ai_hits = _ai_lookup_side_effects(unmatched)
         for med in unmatched:
-            side_effects[med] = ai_hits.get(med, _UNKNOWN_MED_FALLBACK)
+            side_effects[med] = ai_hits.get(
+                med,
+                "Unable to identify this medicine confidently. Check the spelling and active ingredient on the package, then ask a pharmacist or clinician.",
+            )
 
     return side_effects
 
@@ -1381,6 +1395,7 @@ def fetch_patient_history(patient_id):
                     documents_formatted.append({
                         "document_label":    f"Document {doc_num}",
                         "doc_id":            doc["doc_id"],
+                        "extracted_text":    doc_lines,
                         "clinical_summary":  clinical_summary,
                         "medications_found": doc_meds,
                         "lab_results":       doc_labs,

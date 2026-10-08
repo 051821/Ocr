@@ -1,256 +1,304 @@
+"""Compact longitudinal clinical review generation through OpenRouter."""
+
+import json
+import logging
+import os
+import re
+import sys
+from pathlib import Path
+
 import requests
-from config import OPENROUTER_API_KEY
-from patient_timeline import create_patient_timeline
+
+PROJECT_ROOT = str(Path(__file__).resolve().parents[1])
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 try:
-    from longitudinal.adapters import adapt_from_simple_history
-    from longitudinal.longitudinal import run_longitudinal_analysis
-    from longitudinal.report_generator import generate_longitudinal_report
-    HAS_LONGITUDINAL = True
-except ImportError:
-    HAS_LONGITUDINAL = False
+    from config import OPENROUTER_API_KEY
+except Exception:
+    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 
+from medication_journey import compute_medication_journey
 
-# ============================================================
-# OpenRouter Configuration
-# ============================================================
+logger = logging.getLogger(__name__)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-
-HEADERS = {
-    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-    "Content-Type": "application/json",
-}
-
-# Supported OpenRouter models with fallback
-PRIMARY_MODEL = "inclusionai/ling-3.0-flash-sante:free"
+HEADERS = {"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"}
+PRIMARY_MODEL = "mistralai/mistral-small-3.2-24b-instruct"
 FALLBACK_MODELS = [
-    "mistralai/mistral-small-3.2-24b-instruct",
     "meta-llama/llama-3.3-70b-instruct",
-    "google/gemini-2.0-flash-001"
+    "google/gemini-2.0-flash-001",
+    "inclusionai/ling-3.0-flash-sante:free",
 ]
+PROMPT_VERSION = "clinical_ai_review_v5"
+REQUIRED_ENDING = "Retrospective record-based observations only; clinician review is required for interpretation and decision-making."
+REVIEW_SECTIONS = ("Overall Pattern", "Key Insights", "Review Points", "General Patient Considerations", "Evidence")
+
+SYSTEM_PROMPT = f"""You are a senior clinical documentation review AI assisting a practicing physician. Provide rigorous, higher-order longitudinal synthesis rather than superficial restatements.
+
+Use ONLY supplied normalized patient evidence. Do not duplicate the chronological visit list, full lab tables, or medication lists.
+Do NOT independently diagnose conditions. Do NOT infer a diagnosis solely from an isolated laboratory value.
+Do NOT claim causation without supporting evidence.
+Do NOT make unsupported statements such as:
+"strong likelihood of T2DM"
+"metabolic syndrome"
+"liver function abnormalities"
+"may indicate anemia or dehydration"
+Instead use objective clinical framing such as:
+"The record documents..."
+"The available records show..."
+"A repeated finding is..."
+"The available record does not establish the cause."
+"This may warrant review."
+
+Do NOT prescribe medication, suggest starting/stopping/changing medication, specify drug doses, or construct medical treatment plans.
+
+SYNTHESIS GUIDELINES FOR HIGH CLINICAL VALUE:
+1. Multi-System Evolution & Drug-Condition Dynamics: Synthesize how distinct disease domains interact over time (e.g. dermatological/infectious conditions transitioning into chronic cardiometabolic conditions, corticosteroid exposure in the setting of emerging glycemic dysregulation, or how lab findings correlate with documented complaints like polyuria/thirst).
+2. Quantified Evidence: Cite specific documented parameters (e.g. HbA1c 7.6%, Triglycerides 162.99 mg/dL, PCV 37.9%) to substantiate observations.
+3. Care Continuity Vulnerabilities: Specifically analyze how missed follow-ups or medication transitions leave clinical responses unverified.
+4. Bold Topic Leads: Prefix every insight bullet with a concise bold topic lead (e.g. **Cardiometabolic & Steroid Dynamics:**, **Care Continuity & Pharmacotherapy Transition:**, **Hematological Baseline vs Inflammatory Context:**, **Cross-Source Medication Reconciliation:**).
+
+GENERAL PATIENT CONSIDERATIONS (PRACTICAL DIET & LIFESTYLE GUIDANCE):
+Include 3–5 condition-specific, practical self-care and dietary dialogue points tailored to the patient's actual documented conditions (e.g. T2DM, elevated lipids, hypertension, eczema, gastroenteritis):
+- Concrete Dietary & Nutritional Guidance:
+  * For glycemic/metabolic findings: practical carbohydrate distribution, portion awareness, prioritizing complex fiber-rich foods, and minimizing refined sugars/sweetened beverages.
+  * For elevated triglycerides/lipids: reducing trans-fats, deep-fried snacks, and saturated fats in favor of heart-healthy unsaturated fats and whole grains.
+  * For hypertension: moderate sodium restriction and avoiding heavily processed salty foods.
+  * For post-gastrointestinal or dehydration complaints: steady daily hydration and easily digestible fluids.
+- Condition-Specific Self-Care & Monitoring:
+  * For chronic eczema/skin conditions: gentle emollient/moisturizer application within 3 minutes of lukewarm bathing to protect the epidermal barrier.
+  * For glycemic therapy: patient awareness of early warning signs of hypoglycemia (sweating, tremors, dizziness) and hyperglycemia (extreme thirst, polyuria), with clear thresholds for seeking medical attention.
+  * For care continuity: prompt re-engagement on missed follow-up appointments.
+Prefix each consideration with a bold label (e.g. **Dietary Carbohydrate & Glycemic Management:**, **Lipid & Heart-Healthy Nutrition:**, **Dietary Sodium & Blood Pressure:**, **Skin Barrier & Emollient Care:**, **Hydration & Symptom Awareness:**, **Care Continuity & Follow-Up:**).
+
+Return exactly this Markdown structure and no other headings:
+# AI Clinical Review
+
+## Overall Pattern
+2–3 concise sentences describing the multi-system longitudinal trajectory.
+
+## Key Insights
+3–5 concise bullets with bold topic leads highlighting high-order patterns, cross-condition interactions, or reconciliation gaps.
+
+## Review Points
+0–3 bullets highlighting clinical audit items warranting physician verification.
+
+## General Patient Considerations
+3–5 practical condition-tailored dietary, lifestyle, and monitoring bullets with bold topic leads.
+
+## Evidence
+Maximum 5 concise references citing dates, visits, or documents.
+
+Target: 300–480 words. Hard maximum: 550 words.
+End exactly with:
+{REQUIRED_ENDING}"""
 
 
-# ============================================================
-# Prompt for Dashboard Analysis
-# ============================================================
-
-def build_longitudinal_analysis_prompt(patient_data):
-
-    timeline = create_patient_timeline(patient_data)
-
-    prompt = f"""
-You are a clinical documentation analysis AI assistant. Provide a structured, concise retrospective analysis of this patient's medical timeline.
-
-CRITICAL RULES:
-1. STRICTLY NO MEDICAL ADVICE / NO PRESCRIBING / NO TREATMENT ALTERATIONS. Retrospective data summary only.
-2. FORMATTING REQUIREMENTS:
-   - Use clean Markdown tables for Medications, Vitals, and Lab Tests.
-   - Keep summaries concise and well-organized.
-   - Label each visit explicitly as "Initial Visit" (Visit #1) or "Follow-Up #N" (subsequent visits).
-
-SECTION GUIDELINES:
-
-### 📋 Patient Past History Summary (Date-Wise)
-- For EVERY visit, show a row with: Visit # | Type (Initial / Follow-Up #N) | Date | Chief Complaint | Provisional/Confirmed Dx | Medicines class given (e.g. antihistamine, topical steroid, antibiotic).
-- After the table, write a 3–5 sentence narrative summarising the overall treatment trend and how complaints evolved across visits.
-- Explicitly call out any notable discrepancies (diagnosis shifts, age/sex mismatches across documents, vital value conflicts).
-
-### 💊 Identified Medications, Purpose & Complaint Match
-Present a Markdown Table with these exact columns:
-| Medication | Source (Rx DB / Document) | Drug Class | Primary Purpose / Indication | Matches Chief Complaint? | General Potential Side Effects (Reference Only) |
-
-### 📈 Date-Wise Vitals & Clinical Trend Analysis
-- Markdown Table for vitals over visit dates (Date | Visit Type | BP | SpO₂ | Pulse | Temp | Weight).
-- After the table, bullet points for:
-  • Each vital's trend (stable / worsening / improving / concerning single reading).
-  • Flag any single reading outside normal range with the specific value.
-
-### 🧪 Laboratory Test Evaluation (Normal vs Abnormal)
-Present a Markdown Table with columns:
-| Test Name | Result | Reference Range | Status (NORMAL / ABNORMAL) | Clinical Context |
-If no labs: state clearly "No laboratory investigations documented."
-
-### 🔮 Clinical Condition Trajectory & Outlook (Retrospective Pattern Only)
-Based ONLY on the documented visit data above, describe:
-- Whether the primary condition appears to be improving, stable, or recurring based on visit frequency and complaint pattern.
-- Whether medication escalation or de-escalation is observable over time (e.g. systemic steroid added then removed).
-- Any patterns suggesting the condition is chronic vs acute resolution.
-- What follow-up gaps (long intervals between visits) suggest about the patient's engagement or condition stability.
-- **Follow-up Adherence:** Using the Follow-up Schedule data, state the overall adherence rate (X of Y completed), call out any MISSED follow-ups by date, note if any were emergencies, and interpret what missed follow-ups may indicate about the condition.
-- End with: "⚠️ This is a retrospective pattern observation only — not a clinical prediction or medical advice."
-
-### 🥗 General Lifestyle & Everyday Diet Suggestions (Not Medical Advice)
-- Concise bullet points grouped by condition (e.g. HTN, T2DM, Eczema, GI).
-- End with a 1-line reminder to consult a doctor or registered dietitian.
-
-PATIENT TIMELINE DATA:
-{timeline}
-""".strip()
-
-    return prompt
+def _compact(value):
+    """Drop empty values and normalize values for compact JSON context."""
+    if isinstance(value, dict):
+        return {k: v for k, raw in value.items() if (v := _compact(raw)) not in (None, "", [], {})}
+    if isinstance(value, list):
+        return [v for raw in value if (v := _compact(raw)) not in (None, "", [], {})]
+    if isinstance(value, str):
+        return value.strip() or None
+    return value
 
 
-def build_incremental_prompt(old_analysis_markdown: str, patient_data: dict, prev_visit_count: int) -> str:
-    """
-    Lightweight prompt used when hash changed but mismatch_count < FULL_RERUN_THRESHOLD.
-    Feeds the old analysis summary + only the new visits' timeline to the model.
-    Much shorter than a full re-analysis prompt.
-    """
-    from patient_timeline import create_patient_timeline
+def build_ai_review_context(patient_data):
+    """Build a structured, OCR-text-free compact evidence set for longitudinal review."""
+    visits = []
+    # Compute deterministic medication shifts to avoid huge repeated med lists
+    try:
+        med_shifts = compute_medication_journey(patient_data)
+        shift_by_id = {str(item["visit_id"]): item for item in med_shifts}
+    except Exception:
+        shift_by_id = {}
 
-    all_visits  = patient_data.get("visits", [])
-    new_visits  = all_visits[prev_visit_count:]          # only visits added since last run
-    new_count   = len(new_visits)
-    total_count = len(all_visits)
+    for number, visit in enumerate(patient_data.get("visits", []), 1):
+        v_id = str(visit.get("visit_id", number))
+        documents = []
+        for doc in visit.get("documents", []) or []:
+            summary = doc.get("clinical_summary") or {}
+            documents.append({
+                "document_id": doc.get("doc_id"),
+                "clinical_summary": {
+                    key: summary.get(key)
+                    for key in (
+                        "clinical_impression", "clinical_notes", "chief_complaint",
+                        "provisional_diagnosis", "confirmed_diagnosis", "symptoms",
+                    )
+                    if summary.get(key)
+                },
+                "extracted_meds": summary.get("medications") or doc.get("medications_found"),
+                "labs": summary.get("lab_results") or doc.get("lab_results"),
+            })
 
-    # Build a mini patient_data containing only the new visits for timeline
-    mini_data = dict(patient_data)
-    mini_data["visits"] = new_visits
-    mini_data["total_visits"] = new_count
-    new_timeline = create_patient_timeline(mini_data)
+        v_shifts = [c.get("text") for c in shift_by_id.get(v_id, {}).get("changes", [])]
 
-    return f"""
-You are a clinical documentation AI. An existing retrospective analysis exists for this patient
-({total_count - new_count} visits previously analysed). {new_count} new visit(s) have been added.
+        visits.append(_compact({
+            "visit_number": number,
+            "visit_id": visit.get("visit_id"),
+            "date": (visit.get("visit_date") or "")[:10],
+            "chief_complaint": visit.get("db_chief_complaint") or visit.get("chief_complaint"),
+            "provisional_diagnosis": visit.get("db_provisional_dx") or visit.get("provisional_diagnosis"),
+            "confirmed_diagnosis": visit.get("db_confirmed_dx") or visit.get("confirmed_diagnosis"),
+            "medication_shifts": v_shifts if v_shifts else visit.get("db_medications"),
+            "labs": visit.get("lab_results"),
+            "followups": visit.get("followups"),
+            "discrepancies": visit.get("discrepancies"),
+            "documents": documents,
+        }))
 
-TASK: Update the existing analysis below to reflect the new visits. Keep all unchanged sections
-as-is. Only revise sections where the new visit data changes the picture
-(trajectory, medications, vitals trend, labs, discrepancies, outlook).
-
-EXISTING ANALYSIS:
-{old_analysis_markdown}
-
-NEW VISIT(S) TIMELINE ({new_count} visit(s), visit #{total_count - new_count + 1}–{total_count}):
-{new_timeline}
-
-Return the complete updated analysis in the same Markdown format.
-⚠️ Retrospective data summary only — no medical advice.
-""".strip()
+    return _compact({
+        "patient_id": patient_data.get("patient_id"),
+        "total_visits": patient_data.get("total_visits", len(visits)),
+        "visits": visits
+    })
 
 
-# ============================================================
-# Main Patient Analysis
-# ============================================================
+def build_ai_review_prompt(patient_data):
+    context = json.dumps(build_ai_review_context(patient_data), ensure_ascii=False, separators=(",", ":"))
+    return f"{SYSTEM_PROMPT}\n\nLONGITUDINAL PATIENT EVIDENCE (JSON):\n{context}"
 
-def analyze_patient_with_ai(patient_data):
-    """
-    Run retrospective clinical analysis via AI.
 
-    Returns a dict:
-        {
-            "raw_markdown": str,          # Markdown text for dashboard display
-            "model_name":   str,          # model that produced the output
-            "model_version": str,         # empty string – OpenRouter doesn't expose this
-        }
+def build_incremental_prompt(old_analysis_markdown, patient_data, prev_visit_count, previous_context=None):
+    full_context = build_ai_review_context(patient_data)
+    if previous_context:
+        prior_visits = {str(v.get("visit_id", v.get("visit_number"))): v for v in previous_context.get("visits", [])}
+        changed = [v for v in full_context.get("visits", []) if prior_visits.get(str(v.get("visit_id", v.get("visit_number")))) != v]
+    else:
+        changed = full_context.get("visits", [])[max(0, prev_visit_count):]
 
-    Callers that previously expected a plain string should use result["raw_markdown"].
-    """
+    if not changed:
+        changed = full_context.get("visits", [])[-1:]
 
-    # --------------------------------------------------------
-    # 1. Try structured longitudinal analysis first
-    # --------------------------------------------------------
+    context = {"patient_id": full_context.get("patient_id"), "total_visits": len(changed), "visits": changed}
+    previous = str(old_analysis_markdown or "")
+    words = previous.split()
+    previous = " ".join(words[:450])
+    delta = json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+    return (
+        f"{SYSTEM_PROMPT}\n\n"
+        "Update the existing review only if the new evidence materially changes it. "
+        "Otherwise preserve the previous review unchanged. "
+        "Return the complete final review, retaining the required headings and exact ending.\n\n"
+        f"PREVIOUS REVIEW:\n{previous}\n\n"
+        f"NEW OR CHANGED INFORMATION ONLY (JSON):\n{delta}"
+    )
 
-    if HAS_LONGITUDINAL:
-        try:
-            visits = adapt_from_simple_history(patient_data)
-            analysis_payload = run_longitudinal_analysis(visits)
-            report_text = generate_longitudinal_report(analysis_payload)
-            return {
-                "raw_markdown":  report_text,
-                "model_name":    "longitudinal_engine",
-                "model_version": "",
-            }
-        except Exception as e:
-            print(f"Structured longitudinal analysis failed: {e}")
-            print("Falling back to OpenRouter AI models...")
 
-    # --------------------------------------------------------
-    # 2. OpenRouter API Call with Fallback Models
-    # --------------------------------------------------------
-
-    prompt = build_longitudinal_analysis_prompt(patient_data)
-    models_to_try = [PRIMARY_MODEL] + FALLBACK_MODELS
-    last_exception = None
-
-    for model in models_to_try:
+def _call_openrouter(prompt):
+    last_error = None
+    for model in [PRIMARY_MODEL] + FALLBACK_MODELS:
         try:
             payload = {
                 "model": model,
                 "messages": [
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt.replace(SYSTEM_PROMPT + "\n\n", "", 1)}
                 ],
-                "temperature": 0.2
+                "temperature": 0.15,
+                "max_tokens": 750
             }
             if "ling" in model:
                 payload["reasoning"] = {"enabled": True}
-
-            response = requests.post(
-                OPENROUTER_URL,
-                headers=HEADERS,
-                json=payload,
-                timeout=60
-            )
-
+            response = requests.post(OPENROUTER_URL, headers=HEADERS, json=payload, timeout=60)
             response.raise_for_status()
-            result = response.json()
-
-            choices = result.get("choices", [])
+            choices = response.json().get("choices", [])
             if choices and choices[0].get("message", {}).get("content"):
-                markdown_text = choices[0]["message"]["content"]
                 return {
-                    "raw_markdown":  markdown_text,
-                    "model_name":    model,
-                    "model_version": "",   # OpenRouter does not expose version strings
+                    "raw_markdown": _sanitize_review(choices[0]["message"]["content"]),
+                    "model_name": model,
+                    "model_version": ""
                 }
+        except Exception as exc:
+            logger.warning("[Zai_analysis] Model '%s' failed: %s", model, exc)
+            last_error = exc
+    raise RuntimeError(f"AI analysis failed across all models. Last error: {last_error}")
 
-        except Exception as e:
-            print(f"[Zai_analysis] Model '{model}' failed: {e}")
-            last_exception = e
+
+def _sanitize_review(markdown):
+    """Normalize required structure, remove tables/unsupported diagnoses/prescriptions, and cap at 550 words."""
+    sections = {name: [] for name in REVIEW_SECTIONS}
+    current = None
+    skip = False
+
+    # Regex filters for unsafe medication changes or prescribing
+    unsafe_prescription = re.compile(
+        r"\b(?:prescrib\w*|antibiotic\w*)\b|\b(?:start|stop|increase|decrease|switch|adjust|administer|take|cease)\b.{0,60}\b(?:medicat\w*|treatment|drug|dose|antibiotic\w*|pill|therapy|regimen|metformin)\b|\b\d+\s*(?:mg|mcg|ml|units?)\b",
+        re.I
+    )
+
+    # Unsupported diagnostic phrasing replacements
+    unsupported_replacements = [
+        (re.compile(r"\bstrong likelihood of T2DM\b", re.I), "The available record documents glycemic elevation; clinician review is required to evaluate diagnosis."),
+        (re.compile(r"\bmetabolic syndrome\b", re.I), "documented metabolic parameters"),
+        (re.compile(r"\bliver function abnormalities\b", re.I), "recorded liver enzyme variations"),
+        (re.compile(r"\bmay indicate anemia or dehydration\b", re.I), "The available record does not establish the cause."),
+    ]
+
+    for raw_line in str(markdown).splitlines():
+        line = raw_line.strip()
+        if line.startswith("#"):
+            heading = re.sub(r"^#+\s*", "", line).strip()
+            current = next((name for name in REVIEW_SECTIONS if heading.lower() == name.lower() or heading.lower().startswith(name.lower())), None)
+            skip = current is None
+            continue
+        if skip or not line or line == REQUIRED_ENDING or line.startswith("|") or re.fullmatch(r"[-|: ]+", line):
             continue
 
-    raise RuntimeError(f"AI analysis failed across all models. Last error: {last_exception}")
+        # Neutralize unsupported phrases
+        for pattern, replacement in unsupported_replacements:
+            line = pattern.sub(replacement, line)
+
+        # Filter unsafe prescription / dose advice (line or sentence level)
+        if unsafe_prescription.search(line):
+            sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", line) if s.strip()]
+            safe_sentences = [s for s in sentences if not unsafe_prescription.search(s)]
+            line = " ".join(safe_sentences).strip()
+            if not line:
+                continue
+
+        if current:
+            cap = {"Key Insights": 5, "Review Points": 3, "General Patient Considerations": 5, "Evidence": 5}.get(current)
+            if cap is not None and line.startswith(("- ", "* ", "• ")) and sum(x.startswith(("- ", "* ", "• ")) for x in sections[current]) >= cap:
+                continue
+            sections[current].append(line)
+        elif not any(sections["Overall Pattern"]):
+            sections["Overall Pattern"].append(line)
+
+    # Build sanitized output
+    out = ["# AI Clinical Review"]
+    for name in REVIEW_SECTIONS:
+        out.append(f"## {name}")
+        content = sections[name]
+        if content:
+            out.extend(content)
+        elif name == "Review Points":
+            out.append("- No additional review points identified.")
+        elif name == "General Patient Considerations":
+            out.append("- Discuss practical meal choices and portion awareness in the context of documented findings.")
+            out.append("- Maintain appropriate daily activity as tolerated and according to clinician advice.")
+            out.append("- Keep scheduled follow-up and monitoring appointments.")
+        elif name == "Key Insights":
+            out.append("- Documented longitudinal patterns across encounters warrant clinician review.")
+
+    body = "\n".join(out)
+
+    # Ensure hard limit of 550 words
+    words = body.split()
+    ending_words = REQUIRED_ENDING.split()
+    if len(words) > 550 - len(ending_words):
+        body = " ".join(words[:550 - len(ending_words)])
+
+    return body.rstrip() + "\n\n" + REQUIRED_ENDING
 
 
-# ============================================================
-# Shared OpenRouter caller
-# ============================================================
-
-def _call_openrouter(prompt: str) -> dict:
-    """Call OpenRouter with fallback models. Returns same dict as analyze_patient_with_ai."""
-    models_to_try = [PRIMARY_MODEL] + FALLBACK_MODELS
-    last_exception = None
-    for model in models_to_try:
-        try:
-            payload = {
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.2,
-            }
-            if "ling" in model:
-                payload["reasoning"] = {"enabled": True}
-            resp = requests.post(OPENROUTER_URL, headers=HEADERS, json=payload, timeout=60)
-            resp.raise_for_status()
-            choices = resp.json().get("choices", [])
-            if choices and choices[0].get("message", {}).get("content"):
-                return {
-                    "raw_markdown":  choices[0]["message"]["content"],
-                    "model_name":    model,
-                    "model_version": "",
-                }
-        except Exception as e:
-            print(f"[Zai_analysis] Model '{model}' failed: {e}")
-            last_exception = e
-    raise RuntimeError(f"All models failed. Last: {last_exception}")
+def analyze_patient_with_ai(patient_data):
+    return _call_openrouter(build_ai_review_prompt(patient_data))
 
 
-def analyze_patient_incremental(old_markdown: str, patient_data: dict, prev_visit_count: int) -> dict:
-    """
-    Lightweight update: send old analysis summary + new visits only.
-    Used when hash changed but mismatch_count < FULL_RERUN_THRESHOLD.
-    """
-    prompt = build_incremental_prompt(old_markdown, patient_data, prev_visit_count)
-    return _call_openrouter(prompt)
+def analyze_patient_incremental(old_markdown, patient_data, prev_visit_count, previous_context=None):
+    return _call_openrouter(build_incremental_prompt(old_markdown, patient_data, prev_visit_count, previous_context))

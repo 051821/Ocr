@@ -1022,7 +1022,7 @@ def _answer_patient_question(patient_data, patient_id, question, history=None, a
                 answer = f"{_EMERGENCY_NOTICE}\n\n{answer}"
 
         try:
-            set_llm_cache(cache_key, json.dumps(answer, ensure_ascii=False))
+            set_llm_cache(cache_key, json.dumps(answer, ensure_ascii=False), patient_id=patient_id)
         except Exception as cache_exc:
             logger.warning("Failed to write LLM cache: %s", cache_exc)
     except Exception as exc:

@@ -8,6 +8,8 @@ from .ai_analysis_csv import (
     get_llm_cache,
     get_patient_row,
     get_top_questions,
+    purge_expired_cache,
+    purge_patient,
     record_chat_question,
     set_llm_cache,
     upsert_ai_analysis,
@@ -19,7 +21,10 @@ __all__ = [
     "get_llm_cache",
     "get_patient_row",
     "get_top_questions",
+    "purge_expired_cache",
+    "purge_patient",
     "record_chat_question",
     "set_llm_cache",
     "upsert_ai_analysis",
 ]
+

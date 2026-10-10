@@ -34,6 +34,9 @@ APPROVED_MODELS = tuple(dict.fromkeys(
 
 MAX_TOKENS = {"review": 600, "chat": 400, "extraction": 300, "side_effects": 300}
 
+if flag("ENABLE_PROMPT_INJECTION_SANDBOX"):
+    MAX_TOKENS = {**MAX_TOKENS, "extraction": 900}
+
 if flag("ENABLE_HARDENED_CONFIG"):
     OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 else:

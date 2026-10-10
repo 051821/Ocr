@@ -11,9 +11,11 @@ output/*.csv
 data/*.db
 data/*.csv
 data/*.bak
+data/*.csv.bak
 dataanalysis/data/*.db
 dataanalysis/data/*.csv
 dataanalysis/data/*.bak
+dataanalysis/data/*.csv.bak
 *.csv
 # Virtual environments
 venv/

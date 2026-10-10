@@ -3,7 +3,8 @@ requests
 numpy
 opencv-python
 Pillow
-python-dotenv
+python-dotenv==1.2.2
+cryptography==50.0.1
 rapidfuzz
 
 # --- CLIP classifier ---

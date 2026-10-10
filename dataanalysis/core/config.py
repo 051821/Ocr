@@ -1,5 +1,10 @@
-"""Central configuration constants for the analytics application."""
 import os
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 
 def flag(name: str, default: bool = False) -> bool:

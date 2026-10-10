@@ -17,6 +17,7 @@ from core.llm_client import complete as llm_complete
 from medication_journey import compute_medication_journey
 from storage.ai_analysis_csv import get_llm_cache, set_llm_cache
 from neo4j_client import is_neo4j_configured, query_patient_graph
+from review_rules import sanitize_chat_answer
 
 
 CHAT_LOG_QUESTIONS = True
@@ -74,6 +75,13 @@ _LIFESTYLE_RULE = (
     "conditions: dietary recommendations, physical activity, monitoring tips, trigger avoidance. "
     "Do NOT suggest new medicines. Frame as general wellness support."
 )
+
+_EMERGENCY_PATTERN = re.compile(
+    r"\b(?:chest\s+pain|difficulty\s+breathing|short(?:ness)?\s+of\s+breath|suicid(?:e|al)|"
+    r"severe\s+bleeding|hemorrhag(?:e|ic)|stroke|facial\s+droop|slurred\s+speech|numbness\s+on\s+one\s+side)\b",
+    re.I,
+)
+_EMERGENCY_NOTICE = "If this is an emergency, seek urgent medical care now."
 
 SYSTEM_PROMPT = _BASE_PROMPT + _SIDE_EFFECT_RULE + _LAB_RULE + _LIFESTYLE_RULE
 
@@ -887,9 +895,48 @@ def _answer_patient_question(patient_data, patient_id, question, history=None, a
         packed.append(text)
         used += len(text.split())
 
+    def _build_deterministic_fallback():
+        if is_side_effect_q:
+            se_entry = next((e for e in evidence if e.get("category") == "medication side effects reference"), None)
+            med_add_entry = next((e for e in evidence if e.get("category") == "medication change"), None)
+            med_name_detected = se_entry.get("source_id", "this medication") if se_entry else "the medication"
+            effects_str = se_entry.get("content", "") if se_entry else "Common side effects should be checked with a pharmacist or package insert."
+            patient_context = f"Prescribed in {med_add_entry.get('content', 'patient encounters')}; check the patient's clinical notes for any reported reaction." if med_add_entry else "Part of patient regimen; check the patient's clinical notes for any reported reaction."
+            ans = (
+                f"### Answer\n"
+                f"**Common Known Side Effects for {med_name_detected}:**\n"
+                f"- {effects_str}\n\n"
+                f"**Patient-Specific Context:**\n"
+                f"- {patient_context}\n"
+                f"- Monitor for symptoms and contact the clinician if adverse effects arise."
+            )
+        elif is_lab_q and any(w in question.lower() for w in ("indicate", "mean", "interpretation")) and any(e.get("category") in ("laboratory result", "patient diagnoses overview") for e in evidence):
+            lab_items = [item for item in evidence if item.get("category") in ("laboratory result", "patient diagnoses overview")][:5]
+            ans_lines = [f"- **{item['date']} (Encounter #{item.get('visit_index', '?')})**: {item['content'][:250]}" for item in lab_items]
+            ans = "### Answer\nThe documented laboratory findings are listed below; interpretation should be done by the treating clinician:\n" + "\n".join(ans_lines)
+        elif rel and v_num is not None and any(w in q_tokens for w in ("medicine", "medicines", "medication", "medications", "added", "started", "new", "rx")):
+            changes = [item for item in evidence if item.get("category") == "medication change"]
+            if changes:
+                ans_lines = [f"- **Encounter #{ch.get('visit_index', '?')} ({ch['date']})**: {ch['content']}" for ch in changes]
+                ans = f"### Answer\nThe following medication changes were documented {rel} Visit {v_num}:\n" + "\n".join(ans_lines)
+            else:
+                ans = f"### Answer\nNo new medications or changes are documented {rel} Visit {v_num}."
+        else:
+            ans_lines = [f"- **{item['date']} ({item.get('category', 'Record')})**: {item['content'][:250]}" for item in evidence[:5]]
+            ans = "### Answer\nThe relevant patient-record evidence is summarized below:\n" + "\n".join(ans_lines)
+
+        ev_lines = []
+        for item in evidence[:6]:
+            enc_tag = f"Encounter #{item['visit_index']} · " if item.get("visit_index") else ""
+            ev_lines.append(f"- {enc_tag}{item['date']} · Visit {item['visit_id']}")
+        ans += "\n\n### Evidence\n" + "\n".join(ev_lines)
+        return ans
+
+    sanitizer_active = flag("ENABLE_CHAT_OUTPUT_SANITIZER")
+    sanitizer_flag_str = "san:1" if sanitizer_active else "san:0"
     normalized_question = " ".join(_tokens(question))
     vitals_sig = hashlib.blake2b(json.dumps([v.get("db_vitals_json") for v in patient_data.get("visits", [])], sort_keys=True, default=str).encode(), digest_size=8).hexdigest()
-    cache_key = "chat:v12:" + hashlib.blake2b(f"{source_hash or ''}|{vitals_sig}|{normalized_question}".encode(), digest_size=16).hexdigest()
+    cache_key = f"chat:v12:{sanitizer_flag_str}:" + hashlib.blake2b(f"{source_hash or ''}|{vitals_sig}|{normalized_question}".encode(), digest_size=16).hexdigest()
     _packed_evidence = [item for item in evidence
                          if any(item.get("content", "")[:120] in t for t in packed)]
     cached = get_llm_cache(cache_key)
@@ -898,7 +945,8 @@ def _answer_patient_question(patient_data, patient_id, question, history=None, a
         meta["prompt_tokens"] = 0
         meta["completion_tokens"] = 0
         meta["total_tokens"] = 0
-        return json.loads(cached), _packed_evidence
+        cached_answer = json.loads(cached)
+        return cached_answer, _packed_evidence
 
     _sys = _BASE_PROMPT
     if is_side_effect_q:
@@ -935,6 +983,18 @@ def _answer_patient_question(patient_data, patient_id, question, history=None, a
                 enc_tag = f"Encounter #{item['visit_index']} · " if item.get("visit_index") else ""
                 ev_lines.append(f"- {enc_tag}{item['date']} · Visit {item['visit_id']} ({item.get('category', 'Evidence')})")
             answer += "\n\n### Evidence\n" + "\n".join(ev_lines)
+
+        if sanitizer_active:
+            answer = sanitize_chat_answer(answer)
+            # Check if answer body is empty (e.g. only headings remain)
+            ans_body = answer.replace("### Answer", "").replace("### Evidence", "").strip()
+            if not ans_body:
+                answer = _build_deterministic_fallback()
+
+        if sanitizer_active and _EMERGENCY_PATTERN.search(str(question)):
+            if not answer.startswith(_EMERGENCY_NOTICE):
+                answer = f"{_EMERGENCY_NOTICE}\n\n{answer}"
+
         try:
             set_llm_cache(cache_key, json.dumps(answer, ensure_ascii=False))
         except Exception as cache_exc:
@@ -943,41 +1003,10 @@ def _answer_patient_question(patient_data, patient_id, question, history=None, a
         meta["path"] = "fallback"
         meta["error"] = str(exc)[:100]
         logger.warning("Patient chat generation failed: %s", exc)
-        # Deterministic clinical fallback synthesis
-        if is_side_effect_q:
-            se_entry = next((e for e in evidence if e.get("category") == "medication side effects reference"), None)
-            med_add_entry = next((e for e in evidence if e.get("category") == "medication change"), None)
-            med_name_detected = se_entry.get("source_id", "this medication") if se_entry else "the medication"
-            effects_str = se_entry.get("content", "") if se_entry else "Common side effects should be checked with a pharmacist or package insert."
-            patient_context = f"Prescribed in {med_add_entry.get('content', 'patient encounters')}; check the patient's clinical notes for any reported reaction." if med_add_entry else "Part of patient regimen; check the patient's clinical notes for any reported reaction."
-            answer = (
-                f"### Answer\n"
-                f"**Common Known Side Effects for {med_name_detected}:**\n"
-                f"- {effects_str}\n\n"
-                f"**Patient-Specific Context:**\n"
-                f"- {patient_context}\n"
-                f"- Monitor for symptoms and contact the clinician if adverse effects arise."
-            )
-        elif is_lab_q and any(w in question.lower() for w in ("indicate", "mean", "interpretation")) and any(e.get("category") in ("laboratory result", "patient diagnoses overview") for e in evidence):
-            lab_items = [item for item in evidence if item.get("category") in ("laboratory result", "patient diagnoses overview")][:5]
-            ans_lines = [f"- **{item['date']} (Encounter #{item.get('visit_index', '?')})**: {item['content'][:250]}" for item in lab_items]
-            answer = "### Answer\nThe documented laboratory findings are listed below; interpretation should be done by the treating clinician:\n" + "\n".join(ans_lines)
-        elif rel and v_num is not None and any(w in q_tokens for w in ("medicine", "medicines", "medication", "medications", "added", "started", "new", "rx")):
-            changes = [item for item in evidence if item.get("category") == "medication change"]
-            if changes:
-                ans_lines = [f"- **Encounter #{ch.get('visit_index', '?')} ({ch['date']})**: {ch['content']}" for ch in changes]
-                answer = f"### Answer\nThe following medication changes were documented {rel} Visit {v_num}:\n" + "\n".join(ans_lines)
-            else:
-                answer = f"### Answer\nNo new medications or changes are documented {rel} Visit {v_num}."
-        else:
-            ans_lines = [f"- **{item['date']} ({item.get('category', 'Record')})**: {item['content'][:250]}" for item in evidence[:5]]
-            answer = "### Answer\nThe relevant patient-record evidence is summarized below:\n" + "\n".join(ans_lines)
-
-        ev_lines = []
-        for item in evidence[:6]:
-            enc_tag = f"Encounter #{item['visit_index']} · " if item.get("visit_index") else ""
-            ev_lines.append(f"- {enc_tag}{item['date']} · Visit {item['visit_id']}")
-        answer += "\n\n### Evidence\n" + "\n".join(ev_lines)
+        answer = _build_deterministic_fallback()
+        if sanitizer_active and _EMERGENCY_PATTERN.search(str(question)):
+            if not answer.startswith(_EMERGENCY_NOTICE):
+                answer = f"{_EMERGENCY_NOTICE}\n\n{answer}"
 
     return answer, (_packed_evidence if "_packed_evidence" in dir() else evidence)
 

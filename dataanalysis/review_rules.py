@@ -152,3 +152,53 @@ def deterministic_review(patient_data):
         "## Evidence", *evidence, "", REQUIRED_ENDING,
     ]
     return "\n".join(parts)
+
+
+def sanitize_chat_answer(answer_text: str) -> str:
+    """Sanitize LLM chat output by removing sentences with imperative prescribing directives.
+
+    Preserves ### Answer and ### Evidence structure. Returns cleaned text.
+    """
+    if not answer_text or not isinstance(answer_text, str):
+        return ""
+
+    sections = {}
+    current_sec = "body"
+    sections[current_sec] = []
+
+    for raw in answer_text.splitlines():
+        line = raw.strip()
+        if not line:
+            sections[current_sec].append("")
+            continue
+        if line.startswith("### "):
+            heading = line.lstrip("#").strip().casefold()
+            if "answer" in heading:
+                current_sec = "answer"
+            elif "evidence" in heading:
+                current_sec = "evidence"
+            else:
+                current_sec = heading
+            sections.setdefault(current_sec, []).append(line)
+            continue
+
+        # Filter sentences within current line using _IMPERATIVE
+        if _IMPERATIVE.search(line):
+            sentences = re.split(r"(?<=[.!?])\s+", line)
+            safe_sentences = [
+                s.strip() for s in sentences
+                if s.strip() and not _IMPERATIVE.search(s)
+            ]
+            if safe_sentences:
+                clean_line = " ".join(safe_sentences)
+                sections.setdefault(current_sec, []).append(clean_line)
+        else:
+            sections.setdefault(current_sec, []).append(line)
+
+    # Reconstruct text
+    result_lines = []
+    for sec_name, lines in sections.items():
+        result_lines.extend(lines)
+
+    cleaned = "\n".join(result_lines).strip()
+    return cleaned

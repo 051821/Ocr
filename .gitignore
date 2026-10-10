@@ -6,6 +6,14 @@ output/*.csv
 !output/.gitkeep
 .venv/
 *.log
+
+# Local clinical data and generated review cache (may contain PHI)
+data/*.db
+data/*.csv
+data/*.bak
+dataanalysis/data/*.db
+dataanalysis/data/*.csv
+dataanalysis/data/*.bak
 *.csv
 # Virtual environments
 venv/
@@ -36,3 +44,4 @@ outputs/
 # Model/cache folders
 .paddlex/
 .cache/
+logs/

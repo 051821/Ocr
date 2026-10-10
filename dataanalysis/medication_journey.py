@@ -11,16 +11,30 @@ Detects:
 """
 import re
 
+try:
+    from analysis import normalize_med_name
+    from analysis import _is_lab_term
+except ImportError:
+    normalize_med_name = lambda value: str(value or "").strip()
+    _is_lab_term = lambda value: False
+
 
 def _normalize_name(name):
     if not name:
         return ""
-    # Strip strength/form suffixes if mixed into name
-    clean = str(name).strip()
-    return clean
+    clean = re.sub(r"(?i)^(?:tab(?:let)?|cap(?:sule)?|inj(?:ection)?|syp(?:rup)?)\.?\s+", "", str(name).strip())
+    clean = re.sub(r"\b\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml|iu|%)\b", "", clean, flags=re.I)
+    clean = re.sub(r"\s+", " ", clean).strip(" .,:;-_")
+    return normalize_med_name(clean).casefold().strip()
 
 
-def _extract_explicit_discontinuations(visit):
+def _display_name(name):
+    clean = re.sub(r"(?i)^(?:tab(?:let)?|cap(?:sule)?|inj(?:ection)?|syp(?:rup)?)\.?\s+", "", str(name or "").strip())
+    clean = re.sub(r"\b\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml|iu|%)\b", "", clean, flags=re.I)
+    return normalize_med_name(re.sub(r"\s+", " ", clean).strip(" .,:;-_"))
+
+
+def _extract_explicit_discontinuations(visit, known_prescriptions):
     """Detect if clinical instructions or notes explicitly state a drug was stopped.
 
     Rule: Never infer discontinuation merely because a drug is absent.
@@ -40,16 +54,19 @@ def _extract_explicit_discontinuations(visit):
             if val:
                 text_corpus.append(str(val))
 
+    known_names = {key: value.get("name", key) for key, value in known_prescriptions.items()}
+    known_pattern = "|".join(re.escape(name) for name in sorted(known_names.values(), key=len, reverse=True))
+    if not known_pattern:
+        return []
     stop_pattern = re.compile(
-        r"\b(?:discontinue|discontinued|stop|stopped|cease|ceased|withhold|withdrawn|hold)\s+([A-Za-z0-9\-]+)",
+        rf"\b(?:discontinue|discontinued|stop|stopped|cease|ceased|withhold|withdrawn|hold)\s+(?:the\s+)?({known_pattern})\b",
         re.IGNORECASE,
     )
-
     for text in text_corpus:
         matches = stop_pattern.findall(text)
         for match in matches:
-            m_clean = match.strip().lower()
-            if m_clean not in {"all", "any", "the", "this", "treatment", "therapy", "medication", "medications"}:
+            m_clean = _normalize_name(match)
+            if m_clean in known_names:
                 stopped.append(match.strip())
 
     return list(dict.fromkeys(stopped))
@@ -72,7 +89,12 @@ def compute_medication_journey(patient_data):
         }
     ]
     """
-    if not patient_data or not patient_data.get("visits"):
+    if not patient_data:
+        return []
+    cached = patient_data.get("_medication_journey_cache")
+    if cached is not None:
+        return cached
+    if not patient_data.get("visits"):
         return []
 
     visits = patient_data.get("visits", [])
@@ -110,10 +132,11 @@ def compute_medication_journey(patient_data):
         # Deduplicate current visit prescriptions by lowercase name
         current_rx = {}
         for rx in rx_list:
-            name = _normalize_name(rx.get("name"))
-            if name:
-                current_rx[name.lower()] = {
-                    "name": name,
+            display_name = _display_name(rx.get("name"))
+            med_key = _normalize_name(rx.get("name"))
+            if med_key and not _is_lab_term(display_name):
+                current_rx[med_key] = {
+                    "name": display_name,
                     "dosage": str(rx.get("dosage") or "").strip(),
                     "frequency": str(rx.get("frequency") or "").strip(),
                     "duration": str(rx.get("duration") or "").strip(),
@@ -122,10 +145,11 @@ def compute_medication_journey(patient_data):
         # Deduplicate current visit doc meds
         current_doc_meds = {}
         for dm in doc_meds_raw:
-            name = _normalize_name(dm.get("name"))
-            if name:
-                current_doc_meds[name.lower()] = {
-                    "name": name,
+            display_name = _display_name(dm.get("name"))
+            med_key = _normalize_name(dm.get("name"))
+            if med_key and not _is_lab_term(display_name):
+                current_doc_meds[med_key] = {
+                    "name": display_name,
                     "strength": str(dm.get("strength") or dm.get("dosage") or "").strip(),
                     "frequency": str(dm.get("frequency") or "").strip(),
                 }
@@ -149,6 +173,12 @@ def compute_medication_journey(patient_data):
                     "type": "started",
                     "medication": name,
                     "text": f"{action_word}: {detail}"
+                })
+            elif known_prescriptions[med_key].get("discontinued"):
+                encounter_changes.append({
+                    "type": "restarted",
+                    "medication": name,
+                    "text": f"Restarted: {name} {spec}".strip(),
                 })
             else:
                 prev = known_prescriptions[med_key]
@@ -177,12 +207,15 @@ def compute_medication_journey(patient_data):
                 "dosage": dosage,
                 "frequency": frequency,
                 "last_seen_date": v_date,
+                "discontinued": False,
             }
 
         # 2. Check for explicit discontinuations documented in record
-        explicit_stops = _extract_explicit_discontinuations(v)
+        explicit_stops = _extract_explicit_discontinuations(v, known_prescriptions)
         for stop_name in explicit_stops:
-            stop_key = stop_name.lower()
+            stop_key = _normalize_name(stop_name)
+            if stop_key not in known_prescriptions:
+                continue
             encounter_changes.append({
                 "type": "discontinued",
                 "medication": stop_name,
@@ -213,12 +246,17 @@ def compute_medication_journey(patient_data):
                     "text": f"Mismatch: {dname} noted in document but not in structured prescription"
                 })
 
+        all_active_meds = sorted(
+            value["name"] for value in known_prescriptions.values()
+            if not value.get("discontinued")
+        )
         history.append({
             "visit_id": v_id,
             "visit_date": v_date,
             "visit_index": idx,
             "changes": encounter_changes,
-            "active_rx_count": len(current_rx),
+            "active_rx_count": len(all_active_meds),
+            "all_active_meds": all_active_meds,
         })
 
     return history

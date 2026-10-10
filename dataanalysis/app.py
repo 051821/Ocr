@@ -1,7 +1,8 @@
 import os
 import sys
 import re
-from datetime import datetime
+import html
+import logging
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATAANALYSIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -11,17 +12,33 @@ for p in (PROJECT_ROOT, DATAANALYSIS_DIR):
 
 import pandas as pd
 import streamlit as st
-from analysis import fetch_patient_history, fetch_all_patient_ids
-from storage.ai_analysis_csv import get_patient_row
-from ai_review_service import get_or_generate_review, is_review_current
-from patient_chat import answer_patient_question
-from medication_journey import compute_medication_journey
-from neo4j_client import is_neo4j_configured, sync_patient_to_graph
+from core.fetching import fetch_patient_history, fetch_all_patient_ids
+from storage.cache_db import get_patient_row, get_top_questions, record_chat_question
+from services.review_service import get_or_generate_review, is_review_current
+from services.chat.answers import answer_patient_question
+from services.chat.retrieval import build_patient_index
+from services.medication_journey import compute_medication_journey
+from services.review_facts import build_review_facts, compute_source_hash, visit_hashes
+from services.graph_service import is_neo4j_configured, sync_patient_to_graph
+import importlib
+import core.config
+import core.llm_client
+importlib.reload(core.config)
+importlib.reload(core.llm_client)
+import ui_components
+importlib.reload(ui_components)
 from ui_components import render_clinical_encounter, render_doctor_friendly_ai_review
 try:
     from config import OPENROUTER_API_KEY as CHAT_API_KEY
 except Exception:
     CHAT_API_KEY = None
+
+logger = logging.getLogger(__name__)
+
+
+@st.cache_data(ttl=300)
+def _fetch_patient_history_cached(patient_id):
+    return fetch_patient_history(patient_id)
 
 st.set_page_config(
     page_title="Patient Intelligence | Clinical Longitudinal Record",
@@ -474,13 +491,32 @@ def safe_val(val, default="Not available"):
 
 def render_field(label: str, value, default="Not available"):
     """Render a clean, responsive labelled field row."""
-    s = safe_val(value, default)
+    label = html.escape(str(label))
+    s = html.escape(safe_val(value, default))
+    default = html.escape(str(default))
     if s == default:
         st.markdown(f"<div class='field-row'><span class='field-name'>{label}:</span> "
                     f"<span class='field-na'>{default}</span></div>", unsafe_allow_html=True)
     else:
         st.markdown(f"<div class='field-row'><span class='field-name'>{label}:</span> "
                     f"<span class='field-val'>{s}</span></div>", unsafe_allow_html=True)
+
+
+def _chat_label(meta):
+    if not meta or not isinstance(meta, dict):
+        return "LLM-generated response"
+    path = meta.get("path")
+    if path == "llm":
+        total_tokens = meta.get("total_tokens", 0)
+        model = meta.get("model") or "unknown"
+        return f"LLM-generated · {total_tokens} tokens ({model})"
+    if path == "llm_cache":
+        return "Cached LLM answer · 0 new tokens"
+    if path == "deterministic":
+        return "Deterministic from record · no LLM"
+    if path == "fallback":
+        return "Rule-based fallback · LLM unavailable"
+    return "No LLM used"
 
 
 st.markdown('<div class="app-brand">Patient Intelligence</div>', unsafe_allow_html=True)
@@ -537,21 +573,20 @@ if (btn_fetch or patient_id_input) and patient_id_input:
             or "patient_data" not in st.session_state):
         with st.spinner("Retrieving longitudinal patient records..."):
             try:
-                pd_data = fetch_patient_history(patient_id_input)
+                pd_data = _fetch_patient_history_cached(patient_id_input)
                 prior_patient_id = st.session_state.get("active_patient_id")
                 if prior_patient_id and prior_patient_id != patient_id_input:
                     st.session_state.pop("patient_chat_messages", None)
                     st.session_state.pop("patient_chat_patient_id", None)
                 st.session_state["patient_data"] = pd_data
                 st.session_state["active_patient_id"] = patient_id_input
+                st.session_state.pop("medication_journey_data", None)
+                st.session_state["medication_journey_patient_id"] = patient_id_input
+                for cache_key in ("review_facts", "review_visit_hashes", "review_source_hash"):
+                    st.session_state.pop(cache_key, None)
+                st.session_state.pop("patient_chat_index", None)
                 st.session_state.pop("ai_report", None)
                 st.session_state.pop("ai_metadata", None)
-                if is_neo4j_configured():
-                    try:
-                        sync_patient_to_graph(pd_data)
-                    except Exception:
-                        pass
-
             except Exception as e:
                 st.error(f"Error retrieving clinical record: {e}")
 
@@ -569,6 +604,35 @@ if patient_data.get("total_visits", 0) == 0:
 # ── 2. PATIENT OVERVIEW (Compact Metric Cards) ───────────────────────────────
 visits = patient_data.get("visits", [])
 total_visits = patient_data.get("total_visits", 0)
+if (st.session_state.get("medication_journey_patient_id") != str(patient_data.get("patient_id", ""))
+        or "medication_journey_data" not in st.session_state):
+    st.session_state["medication_journey_patient_id"] = str(patient_data.get("patient_id", ""))
+    st.session_state["medication_journey_data"] = compute_medication_journey(patient_data)
+patient_data["_medication_journey_cache"] = st.session_state["medication_journey_data"]
+review_cache_matches = st.session_state.get("review_facts_patient_id") == str(patient_data.get("patient_id", ""))
+if not review_cache_matches or "review_source_hash" not in st.session_state:
+    facts = build_review_facts(patient_data)
+    hashes = visit_hashes(patient_data, facts)
+    st.session_state["review_facts"] = facts
+    st.session_state["review_visit_hashes"] = hashes
+    st.session_state["review_source_hash"] = compute_source_hash(patient_data.get("patient_id", ""), hashes)
+    st.session_state["review_facts_patient_id"] = str(patient_data.get("patient_id", ""))
+patient_data["_review_facts"] = st.session_state["review_facts"]
+patient_data["_review_visit_hashes"] = st.session_state["review_visit_hashes"]
+patient_data["_review_source_hash"] = st.session_state["review_source_hash"]
+if is_neo4j_configured():
+    sync_col, _ = st.columns([1, 5])
+    with sync_col:
+        if st.button("Sync graph", key=f"sync_graph_{patient_data['patient_id']}"):
+            with st.spinner("Syncing this patient's graph..."):
+                if sync_patient_to_graph(patient_data):
+                    st.success("Graph is current.")
+                else:
+                    st.error("Graph sync was unavailable. Check the Neo4j connection.")
+chat_index_matches = st.session_state.get("patient_chat_index_hash") == st.session_state["review_source_hash"]
+if not chat_index_matches or "patient_chat_index" not in st.session_state:
+    st.session_state["patient_chat_index"] = build_patient_index(patient_data)
+    st.session_state["patient_chat_index_hash"] = st.session_state["review_source_hash"]
 
 # Extract Age / Sex from documents if available
 patient_age_sex = "Not available"
@@ -610,7 +674,7 @@ fu_adherence_str = f"{fu_completed}/{len(all_fus)}" if all_fus else "Not schedul
 
 ov1, ov2, ov3, ov4, ov5, ov6, ov7 = st.columns([1.6, 1.1, 0.8, 1.0, 1.5, 1.1, 1.1])
 with ov1:
-    pid_disp = patient_data["patient_id"]
+    pid_disp = html.escape(str(patient_data["patient_id"]))
     st.markdown(f"""
     <div class="metric-card">
         <div class="metric-label">Patient ID</div>
@@ -622,7 +686,7 @@ with ov2:
     st.markdown(f"""
     <div class="metric-card">
         <div class="metric-label">Demographics</div>
-        <div class="metric-value" style="font-size:1.05rem;">{patient_age_sex}</div>
+        <div class="metric-value" style="font-size:1.05rem;">{html.escape(str(patient_age_sex))}</div>
         <div class="metric-sub">Age / Gender</div>
     </div>
     """, unsafe_allow_html=True)
@@ -638,7 +702,7 @@ with ov4:
     st.markdown(f"""
     <div class="metric-card">
         <div class="metric-label">Latest Visit</div>
-        <div class="metric-value" style="font-size:1.05rem;">{latest_visit_date}</div>
+        <div class="metric-value" style="font-size:1.05rem;">{html.escape(str(latest_visit_date))}</div>
         <div class="metric-sub">Most recent entry</div>
     </div>
     """, unsafe_allow_html=True)
@@ -646,7 +710,7 @@ with ov5:
     st.markdown(f"""
     <div class="metric-card">
         <div class="metric-label">Primary Conditions</div>
-        <div class="metric-value" style="font-size:0.92rem;">{conditions_display}</div>
+        <div class="metric-value" style="font-size:0.92rem;">{html.escape(conditions_display)}</div>
         <div class="metric-sub">Diagnoses recorded</div>
     </div>
     """, unsafe_allow_html=True)
@@ -664,7 +728,7 @@ with ov7:
     <div class="metric-card">
         <div class="metric-label">Follow-up Adherence</div>
         <div class="metric-value" style="font-size:1.05rem;">{fu_adherence_str}</div>
-        <div class="metric-sub">{fu_sub}</div>
+        <div class="metric-sub">{html.escape(fu_sub)}</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -689,7 +753,7 @@ with tab_timeline:
     st.markdown('<div class="section-title">Longitudinal Clinical Timeline</div>', unsafe_allow_html=True)
     st.caption("Deterministic chronology of encounters, complaints, diagnoses, document findings, labs, medication shifts, and follow-ups.")
 
-    med_journey_data = compute_medication_journey(patient_data)
+    med_journey_data = st.session_state["medication_journey_data"]
     shifts_by_vid = {enc["visit_id"]: enc["changes"] for enc in med_journey_data}
 
     for idx, v in enumerate(visits, start=1):
@@ -705,7 +769,25 @@ with tab_meds:
     st.markdown('<div class="section-title">Medication Regimen & Longitudinal Changes</div>', unsafe_allow_html=True)
     st.caption("Chronological tracking of medication changes: started, continued, dose/frequency adjustments, and document mismatches.")
 
-    med_journey_data = compute_medication_journey(patient_data)
+    side_effects_cache_key = f"side_effects:v2:{patient_data.get('patient_id', '')}:{st.session_state['review_source_hash']}"
+    if side_effects_cache_key in st.session_state:
+        patient_data["possible_side_effects"] = st.session_state[side_effects_cache_key]
+    pending_lookup = any(
+        "isn't in our local reference list" in str(value)
+        or str(value).startswith("Unable to identify")
+        for value in patient_data.get("possible_side_effects", {}).values()
+    )
+    if pending_lookup:
+        if st.button("Look up unlisted medicines", key="lookup_unlisted_medicines"):
+            with st.spinner("Looking up unlisted medicine names..."):
+                from analysis import get_possible_side_effects
+                looked_up = get_possible_side_effects(patient_data.get("all_medications", []), use_ai=True)
+                st.session_state[side_effects_cache_key] = looked_up
+                patient_data["possible_side_effects"] = looked_up
+                st.session_state["patient_chat_index"] = build_patient_index(patient_data)
+                st.session_state["patient_chat_index_hash"] = st.session_state["review_source_hash"]
+
+    med_journey_data = st.session_state["medication_journey_data"]
     if not med_journey_data or not any(enc.get("changes") for enc in med_journey_data):
         st.info("No medications recorded in either prescription database or extracted clinical documents.")
     else:
@@ -717,9 +799,11 @@ with tab_meds:
             else:
                 for ch in changes:
                     ch_type = ch.get("type", "")
-                    ch_text = ch.get("text", "")
+                    ch_text = html.escape(str(ch.get("text", "")))
                     if ch_type == "started":
                         badge = '<span class="diff-badge-added">Started</span>'
+                    elif ch_type == "restarted":
+                        badge = '<span class="diff-badge-added">Restarted</span>'
                     elif ch_type == "continued":
                         badge = '<span class="diff-badge-stable">Continued</span>'
                     elif ch_type == "dose_changed":
@@ -751,17 +835,10 @@ with tab_meds:
                         source = "Local reference"
                     se_rows.append({"Medication": med_k, "Monitored Considerations": value, "Source": source})
                 side_effects_df = pd.DataFrame(se_rows)
-                st.dataframe(
-                    side_effects_df,
-                    use_container_width=True,
-                    hide_index=True,
-                    height=min(600, 40 + 38 * len(side_effects_df)),
-                    column_config={
-                        "Medication": st.column_config.TextColumn(width="medium"),
-                        "Monitored Considerations": st.column_config.TextColumn(width="large"),
-                        "Source": st.column_config.TextColumn(width="small"),
-                    },
-                )
+                for row in se_rows:
+                    st.markdown(f"**{html.escape(str(row['Medication']))}**  ")
+                    st.write(row["Monitored Considerations"])
+                    st.caption(row["Source"])
                 st.download_button(
                     "Download as CSV",
                     side_effects_df.to_csv(index=False).encode("utf-8"),
@@ -819,30 +896,40 @@ with tab_ai:
     ai_c1, ai_c2 = st.columns([3, 1])
     cache_current = is_review_current(patient_data)
     with ai_c2:
-        force_refresh = st.button("Force Refresh", type="secondary", use_container_width=True) if cache_current else False
+        review_action = st.button(
+            "Force Refresh" if cache_current else "Generate review",
+            type="secondary" if cache_current else "primary",
+            use_container_width=True,
+        )
 
     try:
-        if not cache_current or force_refresh:
+        if cache_current:
+            review = get_or_generate_review(
+                patient_data, force_refresh=bool(review_action)
+            )
+        elif review_action:
             with st.spinner("Updating retrospective longitudinal review..."):
-                review = get_or_generate_review(patient_data, force_refresh=force_refresh)
+                review = get_or_generate_review(patient_data)
         else:
-            review = get_or_generate_review(patient_data)
-        raw_ai_text = review.get("raw_markdown", "")
-        st.session_state["ai_report"] = raw_ai_text
-        st.session_state["ai_metadata"] = {
-            "model_name": review.get("model_name", "AI Engine"),
-            "generated_at": datetime.utcnow().isoformat(),
-            "source_visits": patient_data.get("total_visits", 0),
-        }
-        visit_label = f"{patient_data.get('total_visits', 0)} visits"
-        if review.get("cache_hit"):
-            st.caption(f"Cached review • {visit_label}")
-        elif review.get("status", "").startswith("Incremental"):
-            st.caption(f"Incremental review • {visit_label}")
-        else:
-            st.caption(f"Fresh full review • {visit_label}")
-        if raw_ai_text:
-            render_doctor_friendly_ai_review(raw_ai_text)
+            review = None
+            st.info("No current review is cached. Generate one when you’re ready.")
+        if review:
+            raw_ai_text = review.get("raw_markdown", "")
+            st.session_state["ai_report"] = raw_ai_text
+            st.session_state["ai_metadata"] = {
+                "model_name": review.get("model_name", "AI Engine"),
+                "generated_at": review.get("generated_at", ""),
+                "source_visits": patient_data.get("total_visits", 0),
+            }
+            visit_label = f"{patient_data.get('total_visits', 0)} visits"
+            if review.get("cache_hit"):
+                st.caption(f"Cached review • {visit_label} • generated {review.get('generated_at', 'date unavailable')}")
+            elif review.get("status", "").startswith("Incremental"):
+                st.caption(f"Incremental review • {visit_label}")
+            else:
+                st.caption(f"Fresh full review • {visit_label}")
+            if raw_ai_text:
+                render_doctor_friendly_ai_review(raw_ai_text)
     except Exception as e:
         st.error(f"Failed to load or generate AI retrospective review: {e}")
 
@@ -855,10 +942,22 @@ with tab_chat:
         st.session_state["patient_chat_patient_id"] = active_id
         st.session_state["patient_chat_messages"] = []
     chat_messages = st.session_state.setdefault("patient_chat_messages", [])
+    try:
+        faq = get_top_questions(active_id)
+    except Exception:
+        faq = []
+    if faq:
+        st.caption("Frequently asked")
+        for i, q in enumerate(faq):
+            if st.button(q, key=f"faq_{active_id}_{i}", use_container_width=True):
+                st.session_state["faq_pick"] = q
+                st.rerun()
+    st.caption(f"Session LLM tokens: {sum(m.get('meta', {}).get('total_tokens', 0) for m in chat_messages)}")
     for message in chat_messages:
         with st.chat_message(message["role"]):
             if message["role"] == "assistant":
-                st.caption("LLM-generated response")
+                meta = message.get("meta")
+                st.caption(_chat_label(meta) if meta is not None else "LLM-generated response")
             st.markdown(message["content"])
             if message["role"] == "assistant" and "retrieved_evidence" in message:
                 with st.expander(f"RAG retrieved {len(message['retrieved_evidence'])} item(s)", expanded=False):
@@ -871,7 +970,7 @@ with tab_chat:
                             st.write(item.get("content", ""))
                     else:
                         st.caption("No relevant evidence was retrieved for this question.")
-    question = st.chat_input("Ask a question...")
+    question = st.chat_input("Ask a question...") or st.session_state.pop("faq_pick", None)
     if question and question.strip():
         question = question.strip()
         prior_history = list(chat_messages)
@@ -881,11 +980,20 @@ with tab_chat:
         with st.chat_message("assistant"):
             with st.spinner("Retrieving patient record evidence..."):
                 try:
+                    chat_meta = {}
                     answer, retrieved = answer_patient_question(
                         patient_data, active_id, question, history=prior_history,
                         api_key=CHAT_API_KEY,
+                        retrieval_index=st.session_state["patient_chat_index"],
+                        source_hash=st.session_state["review_source_hash"],
+                        meta=chat_meta,
                     )
-                    st.caption("LLM-generated response")
+                    if retrieved:
+                        try:
+                            record_chat_question(active_id, question)
+                        except Exception:
+                            pass
+                    st.caption(_chat_label(chat_meta))
                     st.markdown(answer)
                     with st.expander(f"RAG retrieved {len(retrieved)} item(s)", expanded=True):
                         if retrieved:
@@ -900,6 +1008,7 @@ with tab_chat:
                     chat_messages.append({
                         "role": "assistant", "content": answer,
                         "retrieved_evidence": retrieved,
+                        "meta": chat_meta,
                     })
                 except Exception as exc:
                     st.error(f"Patient record Q&A failed: {exc}")
@@ -937,6 +1046,39 @@ with tab_sources:
     st.markdown('<div class="section-title">Source Documentation & Extraction Traceability</div>', unsafe_allow_html=True)
     st.caption("Audit trail linking structured clinical fields back to underlying documents and OCR extraction statistics.")
 
+    if any(v.get("documents") for v in visits):
+        if st.button("AI assist low-confidence document extraction", key="ai_assist_extraction"):
+            from analysis import _augment_with_ai_if_gaps, extract_medications_from_text, get_possible_side_effects
+            with st.spinner("Checking low-confidence documents..."):
+                document_meds = set()
+                for visit in visits:
+                    visit_meds = set()
+                    for doc in visit.get("documents", []) or []:
+                        lines = doc.get("extracted_text") or []
+                        summary = doc.get("clinical_summary") or {}
+                        summary = _augment_with_ai_if_gaps(lines, summary)
+                        doc["clinical_summary"] = summary
+                        doc["lab_results"] = summary.get("lab_results") or doc.get("lab_results", [])
+                        names = set(extract_medications_from_text(lines))
+                        names.update(m.get("name") for m in summary.get("medications", []) if m.get("name"))
+                        doc["medications_found"] = sorted(names)
+                        visit_meds.update(names)
+                    visit["document_medications"] = sorted(visit_meds)
+                    document_meds.update(visit_meds)
+                    visit_db_meds = {m.get("name") for m in visit.get("db_medications", []) if m.get("name")}
+                    visit["medications_found"] = sorted(visit_db_meds | visit_meds)
+                patient_data["all_document_medications"] = sorted(document_meds)
+                all_meds = set(patient_data.get("all_db_medications", [])) | document_meds
+                patient_data["all_medications"] = sorted(all_meds)
+                patient_data["possible_side_effects"] = get_possible_side_effects(sorted(all_meds), use_ai=False)
+                st.session_state.pop(f"side_effects:{patient_data.get('patient_id', '')}", None)
+                patient_data.pop("_medication_journey_cache", None)
+                st.session_state.pop("medication_journey_data", None)
+                for cache_key in ("review_facts", "review_visit_hashes", "review_source_hash"):
+                    st.session_state.pop(cache_key, None)
+                    patient_data.pop(f"_{cache_key}", None)
+            st.rerun()
+
     source_records = []
     for idx, v in enumerate(visits, start=1):
         v_date = (v.get("visit_date") or f"Visit {idx}")[:10]
@@ -966,6 +1108,8 @@ with tab_sources:
                     status_str = "Partially Readable"
                 elif ext == 0:
                     status_str = "Low Yield"
+                if cs.get("ai_assisted_fields"):
+                    status_str = "AI-assisted; verify"
 
                 source_records.append({
                     "Visit Date": v_date,

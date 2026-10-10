@@ -1,0 +1,10 @@
+{
+  "general": ["**General education:** Review documented findings and questions with the treating clinician; this summary does not replace individualized care."],
+  "diabetes": ["**General education:** The record includes diabetes related terms; discuss how laboratory monitoring relates to the care plan with the treating clinician."],
+  "glycemic": ["**General education:** The record includes glycemic findings; a clinician can explain their meaning in the context of the full record."],
+  "hypertension": ["**General education:** Blood pressure findings are best interpreted with repeated measurements and the patient's documented history."],
+  "eczema": ["**General education:** Skin symptoms and documented skin care can be reviewed with a clinician or pharmacist."],
+  "gastro": ["**General education:** Gastrointestinal symptoms and documented follow-up can be discussed with the treating clinician."],
+  "lipid": ["**General education:** Lipid results should be interpreted alongside the patient's history and clinician assessment."],
+  "followup": ["**Care continuity:** The record documents missed or pending follow-up; confirm whether the planned review occurred."]
+}

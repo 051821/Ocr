@@ -72,7 +72,7 @@ def parse_ai_review(markdown: str) -> dict:
                 current_section = "key_insights"
             elif "review points" in sec_name:
                 current_section = "review_points"
-            elif "general patient considerations" in sec_name or "considerations" in sec_name:
+            elif sec_name == "general patient considerations":
                 current_section = "considerations"
             elif "evidence" in sec_name:
                 current_section = "evidence"
@@ -173,10 +173,10 @@ def render_doctor_friendly_ai_review(raw_markdown: str):
         """, unsafe_allow_html=True)
 
 
-    # 4. General Patient Considerations (Patient Discussion Guide)
+    # 4. Deterministic General Patient Considerations (Patient Discussion Guide)
     if data["considerations"]:
         st.markdown('<div class="ai-section-hdr">💬 Patient Education & Discussion Considerations</div>', unsafe_allow_html=True)
-        st.caption("Condition-relevant points for clinician-patient dialogue (practical diet, lifestyle, and monitoring guidance).")
+        st.caption("General educational notes selected from documented conditions; discuss individual care with the clinician.")
         col1, col2 = st.columns(2)
         for i, item in enumerate(data["considerations"]):
             target_col = col1 if (i % 2 == 0) else col2
@@ -293,8 +293,9 @@ def render_clinical_encounter(idx: int, visit: dict, med_shifts_for_visit: list)
         impression = clean_clinical_impression(cs.get("clinical_impression", ""))
         symptoms = cs.get("symptoms", []) or []
         cc = cs.get("chief_complaint", "")
+        ai_assisted = bool(cs.get("ai_assisted_fields") or (cs.get("extraction_stats") or {}).get("ai_assisted"))
 
-        has_findings = bool(impression or symptoms or (cc and cc != visit.get("chief_complaint")))
+        has_findings = bool(impression or symptoms or ai_assisted or (cc and cc != visit.get("chief_complaint")))
         if has_findings:
             active_docs.append({
                 "label": label,
@@ -302,6 +303,7 @@ def render_clinical_encounter(idx: int, visit: dict, med_shifts_for_visit: list)
                 "impression": impression,
                 "symptoms": symptoms,
                 "cc": cc,
+                "ai_assisted": ai_assisted,
             })
         else:
             routine_doc_count += 1
@@ -325,12 +327,13 @@ def render_clinical_encounter(idx: int, visit: dict, med_shifts_for_visit: list)
     with st.expander(header_title, expanded=True):
         # 1. Chief Complaint & Diagnoses
         cc = visit.get("db_chief_complaint") or visit.get("chief_complaint") or "Routine encounter / Not documented"
-        st.markdown(f"""
-        <div style="margin-bottom: 0.6rem;">
-            <span style="font-weight: 700; color: #0284C7; font-size: 0.90rem; text-transform: uppercase; letter-spacing: 0.05em;">Chief Complaint:</span>
-            <span style="font-weight: 600; font-size: 0.95rem; margin-left: 6px;">{html.escape(cc)}</span>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(
+            f'<div style="margin-bottom: 0.6rem;">'
+            f'<span style="font-weight: 700; color: #0284C7; font-size: 0.90rem; text-transform: uppercase; letter-spacing: 0.05em;">Chief Complaint:</span>'
+            f'<span style="font-weight: 600; font-size: 0.95rem; margin-left: 6px;">{html.escape(cc)}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
         # Diagnoses Badges
         dx_badges_html = []
@@ -374,12 +377,12 @@ def render_clinical_encounter(idx: int, visit: dict, med_shifts_for_visit: list)
 
                     impr_block = ""
                     if ad["impression"]:
+                        safe_impr = html.escape(str(ad["impression"]).strip()).replace("\n", "<br>")
                         impr_block = (
                             '<div style="margin-top:7px;">'
                             '<div style="font-size:0.72rem; font-weight:700; text-transform:uppercase; '
                             'letter-spacing:0.05em; color:#94A3B8; margin-bottom:3px;">Clinical Impression</div>'
-                            f'<div style="font-size:0.875rem; line-height:1.55; color:inherit;">'
-                            f'{html.escape(ad["impression"])}</div>'
+                            f'<div style="font-size:0.875rem; line-height:1.55; color:inherit;">{safe_impr}</div>'
                             '</div>'
                         )
 
@@ -387,20 +390,21 @@ def render_clinical_encounter(idx: int, visit: dict, med_shifts_for_visit: list)
                         f'<div style="margin-top:8px; display:flex; flex-wrap:wrap; gap:3px;">{symptom_chips}</div>'
                         if symptom_chips else ""
                     )
+                    ai_badge = '<span style="font-size:0.68rem; color:#F59E0B; border:1px solid #F59E0B; border-radius:4px; padding:1px 5px; margin-left:6px;">AI-assisted; verify</span>' if ad.get("ai_assisted") else ""
 
-                    st.markdown(f"""
-                    <div class="doc-clean-card">
-                        <div style="display:flex; justify-content:space-between; align-items:center;">
-                            <div style="display:flex; align-items:center; gap:6px;">
-                                <span style="font-size:1.1rem;">{doc_icon}</span>
-                                <span class="doc-label-badge">{html.escape(ad['label'])}</span>
-                            </div>
-                            <span class="doc-id-badge">ID: {html.escape(ad['short_id'])}</span>
-                        </div>
-                        {impr_block}
-                        {symptom_block}
-                    </div>
-                    """, unsafe_allow_html=True)
+                    document_card = (
+                        '<div class="doc-clean-card">'
+                        '<div style="display:flex; justify-content:space-between; align-items:center;">'
+                        '<div style="display:flex; align-items:center; gap:6px;">'
+                        f'<span style="font-size:1.1rem;">{doc_icon}</span>'
+                        f'<span class="doc-label-badge">{html.escape(ad["label"])}</span>{ai_badge}'
+                        '</div>'
+                        f'<span class="doc-id-badge">ID: {html.escape(ad["short_id"])}</span>'
+                        '</div>'
+                        f'{impr_block}{symptom_block}'
+                        '</div>'
+                    )
+                    st.markdown(document_card, unsafe_allow_html=True)
 
                 if routine_doc_count > 0:
                     st.markdown(
@@ -418,14 +422,15 @@ def render_clinical_encounter(idx: int, visit: dict, med_shifts_for_visit: list)
                     st.markdown(f"<div style='font-size:0.80rem; font-weight:700; color:#EF4444; margin-bottom:4px;'>⚠️ ABNORMAL FINDINGS ({len(abnormal_labs)}):</div>", unsafe_allow_html=True)
                     for ab in abnormal_labs:
                         ref_str = f" <span style='font-size:0.75rem; color:#94A3B8;'>(Ref: {html.escape(ab['ref'])})</span>" if ab['ref'] else ""
-                        st.markdown(f"""
-                        <div class="lab-abnormal-card">
-                            <span style="font-weight:650; color:#F87171;">{html.escape(ab['name'])}:</span>
-                            <span style="font-weight:700; margin: 0 4px;">{html.escape(ab['val'])}</span>
-                            <span class="lab-status-tag">{html.escape(ab['status'])}</span>
-                            {ref_str}
-                        </div>
-                        """, unsafe_allow_html=True)
+                        lab_card = (
+                            '<div class="lab-abnormal-card">'
+                            f'<span style="font-weight:650; color:#F87171;">{html.escape(ab["name"])}:</span> '
+                            f'<span style="font-weight:700; margin: 0 4px;">{html.escape(ab["val"])}</span> '
+                            f'<span class="lab-status-tag">{html.escape(ab["status"])}</span>'
+                            f'{ref_str}'
+                            '</div>'
+                        )
+                        st.markdown(lab_card, unsafe_allow_html=True)
                 else:
                     st.markdown("<div style='font-size:0.82rem; color:#10B981; font-weight:600; margin-bottom:4px;'>✅ All reported laboratory parameters within normal range.</div>", unsafe_allow_html=True)
 
@@ -445,6 +450,8 @@ def render_clinical_encounter(idx: int, visit: dict, med_shifts_for_visit: list)
                     ch_text = ch.get("text", "")
                     if ch_type == "started":
                         badge = '<span class="diff-badge-added">Started</span>'
+                    elif ch_type == "restarted":
+                        badge = '<span class="diff-badge-added">Restarted</span>'
                     elif ch_type == "dose_changed":
                         badge = '<span class="diff-badge-changed">Dose Changed</span>'
                     elif ch_type == "continued":

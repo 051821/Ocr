@@ -1,89 +1,34 @@
-import os
+﻿import os
 import re
 import sys
 import json
+import logging
+from pathlib import Path
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
+MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+if MODULE_DIR not in sys.path:
+    sys.path.insert(0, MODULE_DIR)
 
-from database import db_pool
+from core.db import db_pool
+from core.llm_client import complete as llm_complete
+from storage.ai_analysis_csv import get_llm_cache, set_llm_cache
 
-try:
-    import requests
-    try:
-        from config import OPENROUTER_API_KEY
-    except Exception:
-        OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-    _AI_FALLBACK_AVAILABLE = bool(OPENROUTER_API_KEY)
-except Exception:
-    _AI_FALLBACK_AVAILABLE = False
+logger = logging.getLogger(__name__)
 
 # ============================================================
 # Medication name normalization map (OCR raw → clean display)
 # ============================================================
-MED_NAME_NORMALIZE = {
-    "citrizine":        "Cetirizine",
-    "cetirizine":       "Cetirizine",
-    "levocetirizine":   "Levocetirizine",
-    "fluconazole":      "Fluconazole",
-    "miconazole":       "Miconazole",
-    "miconazole cream": "Miconazole cream",
-    "lobet":            "Lobet GM cream",
-    "lobet gm cream":   "Lobet GM cream",
-    "lobet gm":         "Lobet GM cream",
-    "vasaline":         "Vaseline (petrolatum)",
-    "vaseline":         "Vaseline (petrolatum)",
-    "topisal":          "Topisal",
-    "augmentin":        "Augmentin",
-    "fucibet":          "Fucibet",
-    "omnacortil":       "Omnacortil",
-    "atarax":           "Atarax",
-    "pantoprazole":     "Pantoprazole",
-    "omeprazole":       "Omeprazole",
-    "amlodipine":       "Amlodipine",
-    "telmisartan":      "Telmisartan",
-    "metformin":        "Metformin",
-    "ecosprin":         "Ecosprin",
-    "paracetamol":      "Paracetamol",
-    "azithromycin":     "Azithromycin",
-    "amoxicillin":      "Amoxicillin",
-    "cefixime":         "Cefixime",
-    "ciprofloxacin":    "Ciprofloxacin",
-    "montelukast":      "Montelukast",
-    "ibuprofen":        "Ibuprofen",
-    "diclofenac":       "Diclofenac",
-}
+_REFERENCE_DIR = Path(__file__).resolve().parent / "data" / "reference"
 
-MEDICATION_SIDE_EFFECTS_DB = {
-    "fluconazole":     "Nausea, abdominal pain, diarrhea, headache, skin rash, elevated liver enzymes.",
-    "citrizine":       "Drowsiness, fatigue, dry mouth, headache, dizziness.",
-    "cetirizine":      "Drowsiness, fatigue, dry mouth, headache, dizziness.",
-    "miconazole":      "Local skin irritation, burning sensation, redness, allergic contact dermatitis.",
-    "lobet":           "Skin thinning, burning, redness, local irritation (topical corticosteroid effect).",
-    "vasaline":        "Rare local skin irritation or clogged pores.",
-    "topisal":         "Skin irritation, peeling, dryness, localized skin burning.",
-    "augmentin":       "Diarrhea, nausea, vomiting, abdominal discomfort, skin rash, thrush.",
-    "fucibet":         "Local skin burning, itching, dryness, thinning of skin.",
-    "omnacortil":      "Increased appetite, weight gain, mood changes, elevated blood sugar, stomach irritation.",
-    "atarax":          "Drowsiness, dry mouth, dizziness, sedation, blurred vision.",
-    "pantoprazole":    "Headache, diarrhea, nausea, abdominal pain, flatulence, dizziness.",
-    "omeprazole":      "Headache, stomach pain, nausea, diarrhea, vomiting, flatulence.",
-    "amlodipine":      "Swelling in ankles/feet (edema), dizziness, flushing, fatigue, headache.",
-    "telmisartan":     "Dizziness, upper respiratory infection, back pain, sinus congestion.",
-    "metformin":       "Nausea, vomiting, diarrhea, stomach upset, metallic taste, B12 deficiency.",
-    "ecosprin":        "Stomach irritation, heartburn, nausea, increased bleeding risk.",
-    "paracetamol":     "Rare skin rash, liver toxicity in excessive doses.",
-    "azithromycin":    "Nausea, diarrhea, abdominal pain, vomiting, headache.",
-    "amoxicillin":     "Diarrhea, nausea, vomiting, skin rash.",
-    "cefixime":        "Diarrhea, loose stools, abdominal pain, nausea, indigestion.",
-    "ciprofloxacin":   "Nausea, diarrhea, dizziness, headache, joint pain, tendonitis risk.",
-    "levocetirizine":  "Somnolence, fatigue, dry mouth, pharyngitis.",
-    "montelukast":     "Headache, abdominal pain, cough, fever, upper respiratory infection.",
-    "ibuprofen":       "Heartburn, nausea, abdominal discomfort, stomach ulcers, dizziness.",
-    "diclofenac":      "Stomach pain, nausea, heartburn, ulceration, elevated liver enzymes.",
-}
+def _load_reference(name):
+    with (_REFERENCE_DIR / name).open(encoding="utf-8") as stream:
+        return json.load(stream)
 
+MED_NAME_NORMALIZE = _load_reference("medication_normalize.json")
+MEDICATION_SIDE_EFFECTS_DB = _load_reference("medication_side_effects.json")
 
 # ============================================================
 # Text cleaning utilities
@@ -98,8 +43,8 @@ def normalize_medical_text(text):
             try:
                 parsed = json.loads(s)
                 return normalize_medical_text(parsed)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Unable to normalize serialized medical text: %s", exc)
         return text
     if isinstance(text, list):
         lines = [normalize_medical_text(item) for item in text if item is not None]
@@ -613,7 +558,8 @@ def _is_lab_term(name: str) -> bool:
     # e.g. "serum albumin", "total leucocyte count" — a lab-term as one of
     # the words, with no other substantive word alongside it.
     words = n.split()
-    if all(w in _LAB_TERMS or w in ("serum", "count", "level", "levels")
+    if all(w in _LAB_TERMS or w in ("serum", "count", "level", "levels",
+                                     "in", "of", "the", "and", "for", "with", "to", "at", "on")
            for w in words):
         return True
     return False
@@ -672,7 +618,6 @@ def extract_medications_from_text(text_lines):
     } and not _is_lab_term(m))
 
 
-_AI_SIDE_EFFECTS_MODEL = "google/gemini-2.0-flash-001"
 
 _UNKNOWN_MED_FALLBACK = (
     "This medicine isn't in our local reference list, so we can't show its "
@@ -682,62 +627,56 @@ _UNKNOWN_MED_FALLBACK = (
 
 
 def _ai_lookup_side_effects(unmatched_meds):
-    """For medicines this app doesn't have hardcoded ('unseen' medicines),
-    ask the model for a short, general, well-established side-effect
-    summary instead of silently reusing a generic filler line. Reference
-    information only — never dosing or treatment advice."""
-    if not _AI_FALLBACK_AVAILABLE or not unmatched_meds:
+    """Look up unknown names in one request and cache each name permanently."""
+    if not unmatched_meds:
         return {}
-
-    med_list_str = "\n".join(f"- {m}" for m in unmatched_meds)
+    cache_keys = {med: f"side-effects:v1:{med.strip().casefold()}" for med in unmatched_meds}
+    results, missing = {}, []
+    for med, key in cache_keys.items():
+        try:
+            cached = get_llm_cache(key)
+            if cached is None:
+                missing.append(med)
+                continue
+            value = json.loads(cached)
+            if isinstance(value, str) and value.strip():
+                results[med] = f"{value.strip()} (AI-assisted general reference; verify with a pharmacist or clinician)."
+        except Exception as exc:
+            logger.warning("Side-effect cache read failed for %s: %s", med, exc)
+            missing.append(med)
+    if not missing:
+        return results
+    med_list_str = "\n".join(f"- {m}" for m in missing)
     prompt = (
-        "For each medicine name below, identify the medicine (including "
-        "recognized brand names) and give a short list of its well-established "
-        "common side effects. Keep each value under 20 words. This is for a "
-        "patient-facing educational reference "
-        "panel, NOT dosing or treatment advice — do not suggest starting, "
-        "stopping, or changing any medication. "
-        "If the name is ambiguous, not a recognizable medicine, or OCR is "
-        "too garbled to identify confidently, set its value to null instead "
-        "of guessing. Do not infer an ingredient from a partial brand name. "
-        "Only use widely known, general information — never invent specifics.\n"
-        "Return ONLY minified JSON mapping each name (exactly as given) to "
-        "either a short side-effects string or null. Example:\n"
-        '{"Paracetamol": "Rare skin rash, liver toxicity in excessive doses.", '
-        '"Xyzol": null}\n\n'
+        "You are a medication-reference assistant. Resolve common brand, generic, and minor OCR spelling variants only when confident. "
+        "For each exact input name, return 3 to 6 established common side effects as one short string. "
+        "Use null only when the medicine cannot be identified. Do not give treatment, dose, or diagnosis advice. "
+        "Return one valid JSON object and no prose: exact input name -> string or null.\n\n"
         f"MEDICINE NAMES:\n{med_list_str}"
     )
     try:
-        resp = requests.post(
-            _AI_EXTRACT_URL,
-            headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                     "Content-Type": "application/json"},
-            json={"model": _AI_SIDE_EFFECTS_MODEL,
-                  "messages": [{"role": "user", "content": prompt}],
-                  "temperature": 0},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"].strip()
-        content = re.sub(r"^```(?:json)?|```$", "", content, flags=re.M).strip()
-        data = json.loads(content)
+        response = llm_complete([{"role": "user", "content": prompt}], "side_effects", max_tokens=300)
+        content = response["content"].strip()
+        content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content, flags=re.I).strip()
+        json_match = re.search(r"\{.*\}", content, flags=re.S)
+        data = json.loads(json_match.group(0) if json_match else content)
         if not isinstance(data, dict):
-            return {}
-        # Match keys case-insensitively because model responses may change
-        # capitalization even when the requested names are preserved.
-        returned = {str(k).strip().casefold(): v for k, v in data.items()}
-        return {
-            name: f"{returned[name.casefold()].strip().rstrip('.')} (AI-assisted general reference; verify with a pharmacist or clinician)."
-            for name in unmatched_meds
-            for text in [returned.get(name.casefold())]
-            if isinstance(text, str) and text.strip()
-        }
-    except Exception as e:
-        print(f"[analysis] AI side-effect lookup failed: {e}")
-        return {}
-
-
-def get_possible_side_effects(medication_list):
+            return results
+        returned = {str(key).strip().casefold(): value for key, value in data.items()}
+        for med in missing:
+            text = returned.get(med.casefold())
+            value = text.strip().rstrip(".") if isinstance(text, str) and text.strip() else None
+            try:
+                set_llm_cache(cache_keys[med], json.dumps(value, ensure_ascii=False))
+            except Exception as exc:
+                logger.warning("Side-effect cache write failed for %s: %s", med, exc)
+            if value:
+                results[med] = f"{value} (AI-assisted general reference; verify with a pharmacist or clinician)."
+        return results
+    except Exception as exc:
+        logger.warning("AI side-effect lookup failed: %s", exc)
+        return results
+def get_possible_side_effects(medication_list, use_ai=True):
     side_effects = {}
     unmatched = []
 
@@ -756,13 +695,16 @@ def get_possible_side_effects(medication_list):
     # For locally unknown names, ask the model dynamically. A null or failed
     # lookup remains explicit; it must never be presented as a drug-specific
     # side-effect profile.
-    if unmatched:
+    if unmatched and use_ai:
         ai_hits = _ai_lookup_side_effects(unmatched)
         for med in unmatched:
             side_effects[med] = ai_hits.get(
                 med,
                 "Unable to identify this medicine confidently. Check the spelling and active ingredient on the package, then ask a pharmacist or clinician.",
             )
+    elif unmatched:
+        for med in unmatched:
+            side_effects[med] = _UNKNOWN_MED_FALLBACK
 
     return side_effects
 
@@ -771,7 +713,10 @@ def _evaluate_lab_status(val_s, ref_s):
     if not val_s or not ref_s:
         return "Not Evaluated"
     try:
-        val_clean = float(re.sub(r'[^\d.]', '', str(val_s)))
+        value_match = re.search(r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?", str(val_s))
+        if not value_match:
+            return "Not Evaluated"
+        val_clean = float(value_match.group(0).replace(",", ""))
         ref_str = str(ref_s).strip()
 
         range_m = re.search(r'([\d.]+)\s*[-–—]\s*([\d.]+)', ref_str)
@@ -784,18 +729,29 @@ def _evaluate_lab_status(val_s, ref_s):
             else:
                 return "Normal"
 
-        lt_m = re.search(r'<\s*=?\s*([\d.]+)', ref_str)
+        lt_m = re.search(r'[<≤]\s*=?\s*([\d.]+)', ref_str)
         if lt_m:
             limit = float(lt_m.group(1))
             return "Normal" if val_clean <= limit else "Abnormal (High)"
 
-        gt_m = re.search(r'>\s*=?\s*([\d.]+)', ref_str)
+        gt_m = re.search(r'[>≥]\s*=?\s*([\d.]+)', ref_str)
         if gt_m:
             limit = float(gt_m.group(1))
             return "Normal" if val_clean >= limit else "Abnormal (Low)"
 
-    except Exception:
-        pass
+        status_word = re.search(r"\b(normal|high|elevated|low|decreased|abnormal)\b", ref_str, re.I)
+        if status_word:
+            status = status_word.group(1).casefold()
+            if status == "normal":
+                return "Normal"
+            if status in {"high", "elevated"}:
+                return "Abnormal (High)"
+            if status in {"low", "decreased"}:
+                return "Abnormal (Low)"
+            return "Abnormal"
+
+    except Exception as exc:
+        logger.warning("Unable to evaluate lab status for value %r: %s", val_s, exc)
     return "Not Evaluated"
 
 
@@ -917,250 +873,91 @@ def extract_lab_results_from_text(text_lines):
 # medication — we ask the model to have a look, instead of quietly
 # reporting "not documented".
 
-_AI_EXTRACT_URL = "https://openrouter.ai/api/v1/chat/completions"
-_AI_EXTRACT_MODEL = "google/gemini-2.0-flash-001"
-
-
-def _ai_extract_diagnosis_and_meds(text_lines):
-    """Second-pass OCR extraction for diagnoses and unfamiliar medicine names."""
-    if not _AI_FALLBACK_AVAILABLE or not text_lines:
-        return None
-
-    joined = "\n".join(text_lines)[:10000]
-    prompt = (
-        "You are a clinical-document OCR extraction engine. Extract facts only; "
-        "do not diagnose, prescribe, normalize, or invent. A medicine may be an "
-        "unfamiliar brand/generic name and may not exist in any dictionary. Preserve "
-        "medicine names as written. Ignore dosage, frequency, duration, diagnoses, "
-        "symptoms, doctor names, and lab tests when identifying medicines.\n"
-        "Return ONLY minified JSON:\n"
-        '{"diagnosis": null, "medications": ["medicine name exactly as written"]}\n'
-        "Include every medicine directly visible in the OCR, including unfamiliar "
-        "ones. Never guess from a similar-looking medicine. Omit names that are too "
-        "corrupted to read. Deduplicate.\n\n"
-        f"OCR TEXT:\n{joined}"
-    )
-    try:
-        resp = requests.post(
-            _AI_EXTRACT_URL,
-            headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                     "Content-Type": "application/json"},
-            json={"model": _AI_EXTRACT_MODEL,
-                  "messages": [{"role": "user", "content": prompt}],
-                  "temperature": 0},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"].strip()
-        content = re.sub(r"^```(?:json)?|```$", "", content, flags=re.M).strip()
-        data = json.loads(content)
-        meds = [m.strip() for m in (data.get("medications") or [])
-                if isinstance(m, str) and m.strip()]
-        return {"diagnosis": data.get("diagnosis") or None,
-                "medications": sorted(set(meds))}
-    except Exception as e:
-        print(f"[analysis] AI extraction fallback failed: {e}")
-        return None
-
-
-_AI_FULL_EXTRACT_MODEL = "google/gemini-2.0-flash-001"
-
-
 def _ai_extract_full_clinical_summary(text_lines):
-    """Full-document AI-assisted extraction — the safety net for a document
-    whose layout, wording, or scan quality the hand-written regex patterns
-    have never seen before. Reads the whole document like a person would,
-    rather than pattern-matching known templates, and returns the same
-    schema the regex parser produces so it can be merged in field-by-field
-    (see _augment_with_ai_if_gaps). Only ever called when the structural
-    parser came back essentially empty."""
-    if not _AI_FALLBACK_AVAILABLE or not text_lines:
+    """Extract a weak or unresolved OCR document in one cached request."""
+    if not text_lines:
         return None
-
-    joined = "\n".join(text_lines)[:12000]
+    document = "\n".join(text_lines)[:12000]
     prompt = (
-        "You are a clinical-document OCR extraction engine. Extract facts only "
-        "from the text below — do not diagnose, prescribe, or invent anything not "
-        "present. This document may use a layout, wording, or structure this "
-        "system has never seen before; read it the way a person would, not by "
-        "matching a known template.\n"
-        "Return ONLY minified JSON with exactly this shape (null or [] for "
-        "anything not present — never guess a value):\n"
-        '{"age_sex": "NN years / Male or Female" or null, '
-        '"chief_complaint": string or null, '
-        '"symptoms": ["..."], '
-        '"clinical_impression": string or null, '
-        '"provisional_diagnosis": string or null, '
-        '"confirmed_diagnosis": string or null, '
-        '"vitals": [{"label": "BP or Pulse or Temperature or Weight or Height or SpO2 or Heart Rate", "value": "as written"}], '
-        '"medications": [{"name": "as written, may be unfamiliar", "strength": string or null, '
-        '"frequency": string or null, "duration": string or null}], '
-        '"lab_results": [{"test_name": "as written", "value": "as written", '
-        '"reference": "as written or null"}], '
-        '"follow_up": string or null, '
-        '"clinical_notes": ["..."]}\n'
-        "Preserve every name and value exactly as written, including unfamiliar "
-        "medicine or test names. Never fabricate anything you can't find in the text.\n\n"
-        f"DOCUMENT TEXT:\n{joined}"
+        "Extract facts explicitly present in this clinical document. Do not diagnose or infer. "
+        "Preserve medicine, diagnosis, lab, and value strings as written; use null or [] when absent. "
+        "Return only JSON with keys: age_sex, chief_complaint, symptoms, clinical_impression, "
+        "provisional_diagnosis, confirmed_diagnosis, vitals[{label,value}], medications[{name,strength,frequency,duration}], "
+        "lab_results[{test_name,value,reference}], follow_up, clinical_notes.\n\n"
+        f"DOCUMENT:\n{document}"
     )
     try:
-        resp = requests.post(
-            _AI_EXTRACT_URL,
-            headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                     "Content-Type": "application/json"},
-            json={"model": _AI_FULL_EXTRACT_MODEL,
-                  "messages": [{"role": "user", "content": prompt}],
-                  "temperature": 0},
-            timeout=45,
-        )
-        resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"].strip()
-        content = re.sub(r"^```(?:json)?|```$", "", content, flags=re.M).strip()
+        response = llm_complete([{"role": "user", "content": prompt}], "extraction", max_tokens=300)
+        content = re.sub(r"^```(?:json)?|```$", "", response["content"].strip(), flags=re.M).strip()
         data = json.loads(content)
         return data if isinstance(data, dict) else None
-    except Exception as e:
-        print(f"[analysis] Full AI extraction fallback failed: {e}")
+    except Exception as exc:
+        logger.warning("AI document extraction failed: %s", exc)
         return None
 
 
 def _extraction_looks_weak(clinical_summary) -> bool:
-    """True when the structural/regex parser found essentially nothing at
-    all for this document — the signal that its format hasn't been seen
-    before, and it's worth spending a fuller AI-assisted read-through on
-    it rather than showing the visit as blank."""
-    cs = clinical_summary
-    return not any([
-        cs.get("chief_complaint"), cs.get("clinical_impression"),
-        cs.get("provisional_diagnosis"), cs.get("confirmed_diagnosis"),
-        cs.get("symptoms"), cs.get("medications"), cs.get("vitals"),
-        cs.get("lab_results"), cs.get("age_sex"),
-    ])
+    """True when the deterministic parser extracted no meaningful content."""
+    fields = ("chief_complaint", "clinical_impression", "provisional_diagnosis",
+              "confirmed_diagnosis", "symptoms", "medications", "vitals",
+              "lab_results", "age_sex")
+    return not any(clinical_summary.get(field) for field in fields)
+
+
+def _has_unresolved_medicine_or_diagnosis(text_lines, clinical_summary):
+    meds = {str(item.get("name", "")).casefold() for item in clinical_summary.get("medications", []) if isinstance(item, dict)}
+    meds.update(str(name).casefold() for name in extract_medications_from_text(text_lines))
+    for line in text_lines:
+        candidate = re.search(r"(?i)\b([A-Za-z][A-Za-z0-9+&-]{2,})\s+\d+(?:\.\d+)?\s*(?:mg|ml|mcg|gm|g|iu)\b", line)
+        if candidate and candidate.group(1).casefold() not in meds:
+            return True
+        diagnosis = re.search(r"(?i)\b(?:diagnosis|impression)\s*[:\-]\s*(.{3,100})", line)
+        known_dx = " ".join(str(clinical_summary.get(key) or "") for key in
+                             ("clinical_impression", "provisional_diagnosis", "confirmed_diagnosis")).casefold()
+        if diagnosis and diagnosis.group(1).strip().casefold() not in known_dx:
+            return True
+    return False
 
 
 def _augment_with_ai_if_gaps(doc_lines, clinical_summary):
-    """Two-tier AI safety net on top of the regex parser.
-
-    Tier 1 (always, cheap): a document can otherwise be well-structured but
-    contain one unfamiliar medicine or an unlabeled diagnosis — patch those
-    in without disturbing anything the regex already found.
-
-    Tier 2 (only when Tier 1's document still looks essentially blank):
-    treat this as a document layout the parser has never seen before, and
-    run a full AI-assisted read-through, backfilling every field that is
-    still empty. This never overwrites anything the regex or Tier 1 already
-    found — it only fills gaps.
-    """
-    if not doc_lines or len(doc_lines) < 2:
+    """One Tier 2 extraction only when deterministic parsing leaves a gap."""
+    if not doc_lines or not (
+        _extraction_looks_weak(clinical_summary)
+        or _has_unresolved_medicine_or_diagnosis(doc_lines, clinical_summary)
+    ):
+        return clinical_summary
+    extracted = _ai_extract_full_clinical_summary(doc_lines)
+    if not extracted:
         return clinical_summary
 
-    # ---- Tier 1: light medicine/diagnosis augmentation ----
-    ai_result = _ai_extract_diagnosis_and_meds(doc_lines)
-    if ai_result:
-        existing = {str(m.get("name", "")).strip().lower()
-                    for m in clinical_summary.get("medications", []) if m.get("name")}
-        added = 0
-        for name in ai_result.get("medications", []):
-            clean = normalize_med_name(name)
-            if not clean or clean.lower() in existing:
-                continue
-            clinical_summary["medications"].append({
+    scalar_fields = ("age_sex", "chief_complaint", "clinical_impression",
+                     "provisional_diagnosis", "confirmed_diagnosis", "follow_up")
+    ai_fields = []
+    for field in scalar_fields:
+        if not clinical_summary.get(field) and extracted.get(field):
+            clinical_summary[field] = str(extracted[field])[:300]
+            ai_fields.append(field)
+    for field, limit in (("symptoms", 10), ("clinical_notes", 5), ("vitals", 10), ("lab_results", 30)):
+        if not clinical_summary.get(field) and extracted.get(field):
+            clinical_summary[field] = extracted[field][:limit]
+            ai_fields.append(field)
+    current_meds = {str(item.get("name", "")).casefold() for item in clinical_summary.get("medications", []) if isinstance(item, dict)}
+    for item in extracted.get("medications", [])[:20]:
+        name = str(item.get("name") or "").strip()
+        clean = normalize_med_name(name)
+        if clean and clean.casefold() not in current_meds and not _is_lab_term(clean):
+            clinical_summary.setdefault("medications", []).append({
                 "name": clean,
-                "strength": "Not documented",
-                "frequency": "Not documented",
-                "duration": "Not documented",
-                "notes": "AI-assisted extraction from document text; verify against source.",
-                "source": "AI-assisted (document text)",
+                "strength": item.get("strength"),
+                "frequency": item.get("frequency"),
+                "duration": item.get("duration"),
+                "ai_assisted": True,
             })
-            existing.add(clean.lower())
-            added += 1
-
-        if not clinical_summary.get("clinical_impression") and ai_result.get("diagnosis"):
-            clinical_summary["clinical_impression"] = ai_result["diagnosis"]
-            clinical_summary["extraction_stats"]["ai_assisted"] = True
-        if added:
-            clinical_summary["extraction_stats"]["ai_assisted"] = True
-
-    # ---- Tier 2: unfamiliar document layout — fill in everything else ----
-    if _extraction_looks_weak(clinical_summary):
-        full = _ai_extract_full_clinical_summary(doc_lines)
-        if full:
-            if not clinical_summary.get("age_sex") and full.get("age_sex"):
-                clinical_summary["age_sex"] = str(full["age_sex"])[:60]
-            if not clinical_summary.get("chief_complaint") and full.get("chief_complaint"):
-                clinical_summary["chief_complaint"] = str(full["chief_complaint"])[:300]
-            if not clinical_summary.get("clinical_impression"):
-                imp = full.get("clinical_impression") or full.get("provisional_diagnosis")
-                if imp:
-                    clinical_summary["clinical_impression"] = str(imp)[:300]
-            if not clinical_summary.get("provisional_diagnosis") and full.get("provisional_diagnosis"):
-                clinical_summary["provisional_diagnosis"] = str(full["provisional_diagnosis"])[:300]
-            if not clinical_summary.get("confirmed_diagnosis") and full.get("confirmed_diagnosis"):
-                clinical_summary["confirmed_diagnosis"] = str(full["confirmed_diagnosis"])[:300]
-            if not clinical_summary.get("follow_up") and full.get("follow_up"):
-                clinical_summary["follow_up"] = str(full["follow_up"])[:200]
-
-            if not clinical_summary.get("symptoms"):
-                syms = [str(s).strip() for s in (full.get("symptoms") or []) if str(s).strip()]
-                if syms:
-                    clinical_summary["symptoms"] = syms[:10]
-
-            if not clinical_summary.get("clinical_notes"):
-                fnotes = [str(n).strip() for n in (full.get("clinical_notes") or []) if str(n).strip()]
-                if fnotes:
-                    clinical_summary["clinical_notes"] = fnotes[:5]
-
-            if not clinical_summary.get("vitals"):
-                v_out = []
-                for v in (full.get("vitals") or [])[:10]:
-                    label, value = v.get("label"), v.get("value")
-                    if label and value:
-                        v_out.append({
-                            "label": str(label)[:30], "value": str(value)[:40],
-                            "date": None, "source": "AI-assisted (document text)",
-                            "discrepancy": None,
-                        })
-                if v_out:
-                    clinical_summary["vitals"] = v_out
-
-            if not clinical_summary.get("lab_results"):
-                l_out = []
-                for l in (full.get("lab_results") or [])[:30]:
-                    tname, val = l.get("test_name"), l.get("value")
-                    if tname and val:
-                        ref = l.get("reference") or "Not Specified"
-                        l_out.append({
-                            "test_name": str(tname)[:60], "value": str(val)[:40],
-                            "reference": str(ref)[:40],
-                            "status": _evaluate_lab_status(val, ref),
-                        })
-                if l_out:
-                    clinical_summary["lab_results"] = l_out
-
-            existing_meds_now = {str(m.get("name", "")).strip().lower()
-                                  for m in clinical_summary.get("medications", []) if m.get("name")}
-            for m in (full.get("medications") or [])[:20]:
-                name = m.get("name")
-                if not name:
-                    continue
-                clean = normalize_med_name(name)
-                if not clean or clean.lower() in existing_meds_now or _is_lab_term(clean):
-                    continue
-                clinical_summary["medications"].append({
-                    "name": clean,
-                    "strength": m.get("strength") or "Not documented",
-                    "frequency": m.get("frequency") or "Not documented",
-                    "duration": m.get("duration") or "Not documented",
-                    "notes": "AI-assisted extraction from document text; verify against source.",
-                    "source": "AI-assisted (document text)",
-                })
-                existing_meds_now.add(clean.lower())
-
-            clinical_summary["extraction_stats"]["ai_assisted"] = True
-            clinical_summary["extraction_stats"]["ai_full_pass"] = True
-
+            current_meds.add(clean.casefold())
+            ai_fields.append("medications")
+    clinical_summary["ai_assisted_fields"] = sorted(set(ai_fields))
+    clinical_summary.setdefault("extraction_stats", {})["ai_assisted"] = True
     return clinical_summary
-
-
 # ============================================================
 # Main data fetch
 # ============================================================
@@ -1248,7 +1045,7 @@ def fetch_patient_history(patient_id):
                     WHERE pe.visit_id = v.id
                 ) p ON true
 
-                WHERE v.patient_id::text = %s
+                WHERE v.patient_id = %s::uuid
 
                 ORDER BY v.created_at ASC NULLS LAST;
                 """,
@@ -1375,7 +1172,8 @@ def fetch_patient_history(patient_id):
                     # diagnosis/medications despite real text being present,
                     # fall back to an AI-assisted pass instead of just
                     # giving up on anything not in the hardcoded lists.
-                    clinical_summary = _augment_with_ai_if_gaps(doc_lines, clinical_summary)
+                    # Keep record fetch deterministic; AI enrichment is
+                    # triggered explicitly from the relevant UI action.
 
                     # clinical_summary["lab_results"] already IS the regex
                     # extraction, plus anything Tier 2 above backfilled for
@@ -1429,8 +1227,8 @@ def fetch_patient_history(patient_id):
                                             f"{documents_formatted[-1]['document_label']}: {ocr_vital['label']} — "
                                             f"structured record shows {db_val}, document shows {ocr_vital['value'].split()[0]}."
                                         )
-                                except Exception:
-                                    pass
+                                except Exception as exc:
+                                    logger.warning("Unable to compare structured and OCR vital values: %s", exc)
 
             # Database medicines come ONLY from prescriptionitem; prescription
             # instruction text is no longer mined for medicine names.
@@ -1470,7 +1268,7 @@ def fetch_patient_history(patient_id):
             "all_medications":  sorted(all_meds),
             "all_db_medications":       sorted(all_db_meds),
             "all_document_medications": sorted(all_doc_meds),
-            "possible_side_effects": get_possible_side_effects(sorted(all_meds)),
+            "possible_side_effects": get_possible_side_effects(sorted(all_meds), use_ai=False),
         }
 
     finally:

@@ -27,7 +27,7 @@ importlib.reload(core.config)
 importlib.reload(core.llm_client)
 import ui_components
 importlib.reload(ui_components)
-from ui_components import render_clinical_encounter, render_doctor_friendly_ai_review
+from ui_components import esc, render_clinical_encounter, render_doctor_friendly_ai_review
 try:
     from config import OPENROUTER_API_KEY as CHAT_API_KEY
 except Exception:
@@ -815,7 +815,7 @@ with tab_meds:
                     else:
                         badge = '<span class="diff-badge-stable">Documented</span>'
 
-                    st.markdown(f"<div style='margin-left: 1rem; margin-bottom: 0.35rem;'>{badge} <span style='font-size:0.92rem; font-weight:500; margin-left:6px;'>{ch_text}</span></div>", unsafe_allow_html=True)
+                    st.markdown(f"<div style='margin-left: 1rem; margin-bottom: 0.35rem;'>{badge} <span style='font-size:0.92rem; font-weight:500; margin-left:6px;'>{esc(ch_text)}</span></div>", unsafe_allow_html=True)
             st.write("")
 
         possible_side_effects = patient_data.get("possible_side_effects", {})

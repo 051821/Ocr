@@ -7,6 +7,21 @@ import html
 import re
 import streamlit as st
 
+from core.config import flag
+
+
+def esc(value) -> str:
+    """Safely escape a value for HTML interpolation.
+
+    When ENABLE_STRICT_HTML_SANITIZATION is False, preserves raw string behavior.
+    When True, converts None to empty string and escapes HTML entities.
+    """
+    if not flag("ENABLE_STRICT_HTML_SANITIZATION"):
+        return str(value) if value is not None else ""
+    if value is None:
+        return ""
+    return html.escape(str(value))
+
 
 def _md_to_html(text: str) -> str:
     """Minimal safe markdown-to-HTML: bold, italic, escaped HTML only."""

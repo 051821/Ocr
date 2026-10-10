@@ -1,4 +1,4 @@
-﻿import os
+import os
 import re
 import sys
 import json
@@ -14,6 +14,7 @@ if MODULE_DIR not in sys.path:
 
 from core.db import db_pool
 from core.llm_client import complete as llm_complete
+from core.config import flag
 from storage.ai_analysis_csv import get_llm_cache, set_llm_cache
 
 logger = logging.getLogger(__name__)
@@ -630,7 +631,14 @@ def _ai_lookup_side_effects(unmatched_meds):
     """Look up unknown names in one request and cache each name permanently."""
     if not unmatched_meds:
         return {}
-    cache_keys = {med: f"side-effects:v1:{med.strip().casefold()}" for med in unmatched_meds}
+    _se_ver = "v1"
+    if flag("ENABLE_EXTERNAL_PROMPTS"):
+        try:
+            from core.prompts import SIDE_EFFECTS_PROMPT_VERSION as _spv
+            _se_ver = _spv
+        except Exception:
+            pass
+    cache_keys = {med: f"side-effects:{_se_ver}:{med.strip().casefold()}" for med in unmatched_meds}
     results, missing = {}, []
     for med, key in cache_keys.items():
         try:
@@ -647,13 +655,26 @@ def _ai_lookup_side_effects(unmatched_meds):
     if not missing:
         return results
     med_list_str = "\n".join(f"- {m}" for m in missing)
-    prompt = (
-        "You are a medication-reference assistant. Resolve common brand, generic, and minor OCR spelling variants only when confident. "
-        "For each exact input name, return 3 to 6 established common side effects as one short string. "
-        "Use null only when the medicine cannot be identified. Do not give treatment, dose, or diagnosis advice. "
-        "Return one valid JSON object and no prose: exact input name -> string or null.\n\n"
-        f"MEDICINE NAMES:\n{med_list_str}"
-    )
+    if flag("ENABLE_EXTERNAL_PROMPTS"):
+        try:
+            from core.prompts import load as _lp
+            prompt = _lp("side_effects_lookup.md").format(med_list=med_list_str)
+        except Exception:
+            prompt = (
+                "You are a medication-reference assistant. Resolve common brand, generic, and minor OCR spelling variants only when confident. "
+                "For each exact input name, return 3 to 6 established common side effects as one short string. "
+                "Use null only when the medicine cannot be identified. Do not give treatment, dose, or diagnosis advice. "
+                "Return one valid JSON object and no prose: exact input name -> string or null.\n\n"
+                f"MEDICINE NAMES:\n{med_list_str}"
+            )
+    else:
+        prompt = (
+            "You are a medication-reference assistant. Resolve common brand, generic, and minor OCR spelling variants only when confident. "
+            "For each exact input name, return 3 to 6 established common side effects as one short string. "
+            "Use null only when the medicine cannot be identified. Do not give treatment, dose, or diagnosis advice. "
+            "Return one valid JSON object and no prose: exact input name -> string or null.\n\n"
+            f"MEDICINE NAMES:\n{med_list_str}"
+        )
     try:
         response = llm_complete([{"role": "user", "content": prompt}], "side_effects", max_tokens=300)
         content = response["content"].strip()
@@ -878,14 +899,28 @@ def _ai_extract_full_clinical_summary(text_lines):
     if not text_lines:
         return None
     document = "\n".join(text_lines)[:12000]
-    prompt = (
-        "Extract facts explicitly present in this clinical document. Do not diagnose or infer. "
-        "Preserve medicine, diagnosis, lab, and value strings as written; use null or [] when absent. "
-        "Return only JSON with keys: age_sex, chief_complaint, symptoms, clinical_impression, "
-        "provisional_diagnosis, confirmed_diagnosis, vitals[{label,value}], medications[{name,strength,frequency,duration}], "
-        "lab_results[{test_name,value,reference}], follow_up, clinical_notes.\n\n"
-        f"DOCUMENT:\n{document}"
-    )
+    if flag("ENABLE_EXTERNAL_PROMPTS"):
+        try:
+            from core.prompts import load as _lp
+            prompt = _lp("extraction.md").format(document=document)
+        except Exception:
+            prompt = (
+                "Extract facts explicitly present in this clinical document. Do not diagnose or infer. "
+                "Preserve medicine, diagnosis, lab, and value strings as written; use null or [] when absent. "
+                "Return only JSON with keys: age_sex, chief_complaint, symptoms, clinical_impression, "
+                "provisional_diagnosis, confirmed_diagnosis, vitals[{label,value}], medications[{name,strength,frequency,duration}], "
+                "lab_results[{test_name,value,reference}], follow_up, clinical_notes.\n\n"
+                f"DOCUMENT:\n{document}"
+            )
+    else:
+        prompt = (
+            "Extract facts explicitly present in this clinical document. Do not diagnose or infer. "
+            "Preserve medicine, diagnosis, lab, and value strings as written; use null or [] when absent. "
+            "Return only JSON with keys: age_sex, chief_complaint, symptoms, clinical_impression, "
+            "provisional_diagnosis, confirmed_diagnosis, vitals[{label,value}], medications[{name,strength,frequency,duration}], "
+            "lab_results[{test_name,value,reference}], follow_up, clinical_notes.\n\n"
+            f"DOCUMENT:\n{document}"
+        )
     try:
         response = llm_complete([{"role": "user", "content": prompt}], "extraction", max_tokens=300)
         content = re.sub(r"^```(?:json)?|```$", "", response["content"].strip(), flags=re.M).strip()

@@ -3,8 +3,18 @@ import hashlib
 import json
 import re
 
+from core.config import flag as _flag
 
 PROMPT_VERSION = "clinical_ai_review_v7"
+
+# When ENABLE_EXTERNAL_PROMPTS is on, swap to the file-derived hash so that
+# any prompt edit automatically invalidates the review cache.
+if _flag("ENABLE_EXTERNAL_PROMPTS"):
+    try:
+        from core.prompts import REVIEW_PROMPT_VERSION as _rpv
+        PROMPT_VERSION = _rpv
+    except Exception:
+        pass  # keep the static fallback
 
 
 def _normalized_medication(value):

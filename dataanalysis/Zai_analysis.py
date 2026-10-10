@@ -1,4 +1,4 @@
-﻿"""Compact longitudinal clinical review generation through OpenRouter."""
+"""Compact longitudinal clinical review generation through OpenRouter."""
 
 import json
 import sys
@@ -16,8 +16,9 @@ from review_facts import PROMPT_VERSION
 from medication_journey import compute_medication_journey
 from core.llm_client import complete as llm_complete
 from review_rules import REQUIRED_ENDING, REVIEW_SECTIONS, sanitize_review as _sanitize
+from core.config import flag as _flag
 
-SYSTEM_PROMPT = """You are a clinical-record review assistant. Analyze the patient’s complete medical journey using only supplied records. Summarize the timeline, documented conditions, investigations, treatments, clinical progress, response, complications, and unresolved issues.
+SYSTEM_PROMPT = """You are a clinical-record review assistant. Analyze the patient's complete medical journey using only supplied records. Summarize the timeline, documented conditions, investigations, treatments, clinical progress, response, complications, and unresolved issues.
 
 **Prioritize red flags:** critical or worsening results, clinical deterioration, emergency indicators, persistent symptoms, abnormal trends, potential medication-related concerns, and gaps in follow-up. Explain their significance only when supported by evidence. Distinguish documented facts, uncertainties, and missing information. Highlight key turning points, conflicting records, and issues requiring clinician review. Never invent facts, diagnose, prescribe, recommend medication changes, or provide lifestyle advice.
 
@@ -31,6 +32,16 @@ Use exactly these Markdown headings:
 Be concise, chronological where useful, and evidence-based. Include dates, values, units, and source references when available. Keep the review between 250 and 400 words. End with:
 
 **Retrospective review only: based on supplied records, not a real-time assessment or a substitute for clinician judgment.**"""
+
+# When ENABLE_EXTERNAL_PROMPTS is on, load the system prompt from the prompt
+# file and substitute the canonical REQUIRED_ENDING so both the prompt and the
+# validator agree on the exact ending text.
+if _flag("ENABLE_EXTERNAL_PROMPTS"):
+    try:
+        from core.prompts import load as _load_prompt
+        SYSTEM_PROMPT = _load_prompt("review_system.md").format(required_ending=REQUIRED_ENDING)
+    except Exception:
+        pass  # keep the hardcoded fallback
 
 
 def build_ai_review_context(patient_data):
@@ -72,7 +83,15 @@ def build_ai_review_context(patient_data):
 def build_ai_review_prompt(patient_data, retry_feedback=None):
     context = json.dumps(build_ai_review_context(patient_data), ensure_ascii=False, separators=(",", ":"))
     feedback = f"\n\nCorrection required: {retry_feedback}" if retry_feedback else ""
+    if _flag("ENABLE_EXTERNAL_PROMPTS"):
+        try:
+            return _load_prompt("review_user.md").format(
+                required_ending=REQUIRED_ENDING, context=context, feedback=feedback
+            )
+        except Exception:
+            pass
     return f"Return only the required four-section Markdown review. End with this exact line: {REQUIRED_ENDING}\nLONGITUDINAL PATIENT FACTS (JSON):\n{context}{feedback}"
+
 def build_incremental_prompt(old_analysis_markdown, patient_data, prev_visit_count=0, previous_context=None):
     """Build an update prompt containing only changed visits and prior review."""
     current = json.dumps(build_ai_review_context(patient_data), ensure_ascii=False, separators=(",", ":"))
@@ -84,6 +103,13 @@ def build_incremental_prompt(old_analysis_markdown, patient_data, prev_visit_cou
         kept.append(line)
         words += count
     previous = "\n".join(kept)
+    if _flag("ENABLE_EXTERNAL_PROMPTS"):
+        try:
+            return _load_prompt("review_incremental.md").format(
+                required_ending=REQUIRED_ENDING, previous=previous, current=current
+            )
+        except Exception:
+            pass
     return (
         f"Update the review only when the supplied changed evidence warrants it. Preserve the required headings and exact ending: {REQUIRED_ENDING}\n\n"
         f"PREVIOUS REVIEW:\n{previous}\n\nCHANGED VISIT FACTS (JSON):\n{current}"

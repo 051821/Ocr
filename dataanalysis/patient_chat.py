@@ -936,7 +936,15 @@ def _answer_patient_question(patient_data, patient_id, question, history=None, a
     sanitizer_flag_str = "san:1" if sanitizer_active else "san:0"
     normalized_question = " ".join(_tokens(question))
     vitals_sig = hashlib.blake2b(json.dumps([v.get("db_vitals_json") for v in patient_data.get("visits", [])], sort_keys=True, default=str).encode(), digest_size=8).hexdigest()
-    cache_key = f"chat:v12:{sanitizer_flag_str}:" + hashlib.blake2b(f"{source_hash or ''}|{vitals_sig}|{normalized_question}".encode(), digest_size=16).hexdigest()
+    if flag("ENABLE_EXTERNAL_PROMPTS"):
+        try:
+            from core.prompts import CHAT_PROMPT_VERSION as _cpv
+            _chat_pv = _cpv
+        except Exception:
+            _chat_pv = "chat:static"
+    else:
+        _chat_pv = "chat:static"
+    cache_key = f"chat:v12:{sanitizer_flag_str}:{_chat_pv}:" + hashlib.blake2b(f"{source_hash or ''}|{vitals_sig}|{normalized_question}".encode(), digest_size=16).hexdigest()
     _packed_evidence = [item for item in evidence
                          if any(item.get("content", "")[:120] in t for t in packed)]
     cached = get_llm_cache(cache_key)
@@ -955,6 +963,16 @@ def _answer_patient_question(patient_data, patient_id, question, history=None, a
         _sys += _LAB_RULE
     if is_lifestyle_q:
         _sys += _LIFESTYLE_RULE
+    if flag("ENABLE_EXTERNAL_PROMPTS"):
+        try:
+            from core.prompts import load as _lp
+            _sys = _lp("chat_mode_record.md")
+            if is_side_effect_q or is_lab_q:
+                _sys += "\n" + _lp("chat_mode_knowledge.md")
+            if is_lifestyle_q:
+                _sys += "\n" + _lp("chat_mode_general.md")
+        except Exception:
+            pass  # fall back to hardcoded strings already set above
     messages = [{"role": "system", "content": _sys}]
     for item in (history or [])[-2:]:
         if item.get("role") in {"user", "assistant"}:

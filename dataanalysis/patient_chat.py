@@ -1,16 +1,18 @@
 """Patient-scoped clinical answers and bounded local retrieval."""
 import hashlib
+import hmac
 import json
 import logging
 from logging.handlers import RotatingFileHandler
 import math
+import os
 from pathlib import Path
 import re
 import time
 from collections import Counter
 from datetime import datetime, timezone
 
-from core.config import CHAT_MODEL
+from core.config import CHAT_MODEL, flag
 from core.llm_client import complete as llm_complete
 from medication_journey import compute_medication_journey
 from storage.ai_analysis_csv import get_llm_cache, set_llm_cache
@@ -27,13 +29,21 @@ audit_logger.setLevel(logging.INFO)
 if not audit_logger.handlers:
     _log_dir = Path(__file__).resolve().parent / "logs"
     _log_dir.mkdir(parents=True, exist_ok=True)
+    _log_file = _log_dir / "patient_chat.log"
     _handler = RotatingFileHandler(
-        str(_log_dir / "patient_chat.log"),
+        str(_log_file),
         maxBytes=1_000_000,
         backupCount=3,
         encoding="utf-8",
     )
     audit_logger.addHandler(_handler)
+    try:
+        if _log_file.exists():
+            os.chmod(str(_log_file), 0o600)
+    except Exception:
+        pass
+
+_SALT_WARNED = False
 
 _BASE_PROMPT = (
     "You are an expert Clinical AI Assistant specializing in longitudinal patient records, medical journeys, and condition tracking.\n"
@@ -990,24 +1000,54 @@ def answer_patient_question(
     finally:
         try:
             ms = round((time.perf_counter() - t0) * 1000, 2)
-            log_question = str(question)[:120] if CHAT_LOG_QUESTIONS else hashlib.blake2b(str(question).encode("utf-8")).hexdigest()
             retrieved_map = dict(Counter(item.get("category", "") for item in (evidence or [])))
             sources = [f"{item.get('category')}|{item.get('visit_id')}|{item.get('source_id')}" for item in (evidence or [])[:8]]
-            log_entry = {
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "patient_id": str(patient_id),
-                "question": log_question,
-                "path": meta.get("path"),
-                "rule": meta.get("rule"),
-                "model": meta.get("model"),
-                "prompt_tokens": meta.get("prompt_tokens", 0),
-                "completion_tokens": meta.get("completion_tokens", 0),
-                "total_tokens": meta.get("total_tokens", 0),
-                "retrieved": retrieved_map,
-                "sources": sources,
-                "ms": ms,
-                "error": meta.get("error"),
-            }
+
+            if flag("ENABLE_ANONYMIZED_AUDIT_LOGS"):
+                salt = os.getenv("AUDIT_HASH_SALT", "").encode("utf-8")
+                if not salt:
+                    global _SALT_WARNED
+                    if not _SALT_WARNED:
+                        logger.warning("AUDIT_HASH_SALT is missing; anonymized audit logger using 'unknown' for patient_id.")
+                        _SALT_WARNED = True
+                    logged_patient_id = "unknown"
+                else:
+                    logged_patient_id = hmac.new(salt, str(patient_id).encode("utf-8"), hashlib.sha256).hexdigest()[:16]
+
+                log_entry = {
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "patient_id": logged_patient_id,
+                    "question": None,
+                    "question_length": len(str(question or "")),
+                    "token_count": len(str(question or "").split()),
+                    "path": meta.get("path"),
+                    "rule": meta.get("rule"),
+                    "model": meta.get("model"),
+                    "prompt_tokens": meta.get("prompt_tokens", 0),
+                    "completion_tokens": meta.get("completion_tokens", 0),
+                    "total_tokens": meta.get("total_tokens", 0),
+                    "retrieved": retrieved_map,
+                    "sources": sources,
+                    "ms": ms,
+                    "error": meta.get("error"),
+                }
+            else:
+                log_question = str(question)[:120] if CHAT_LOG_QUESTIONS else hashlib.blake2b(str(question).encode("utf-8")).hexdigest()
+                log_entry = {
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "patient_id": str(patient_id),
+                    "question": log_question,
+                    "path": meta.get("path"),
+                    "rule": meta.get("rule"),
+                    "model": meta.get("model"),
+                    "prompt_tokens": meta.get("prompt_tokens", 0),
+                    "completion_tokens": meta.get("completion_tokens", 0),
+                    "total_tokens": meta.get("total_tokens", 0),
+                    "retrieved": retrieved_map,
+                    "sources": sources,
+                    "ms": ms,
+                    "error": meta.get("error"),
+                }
             audit_logger.info(json.dumps(log_entry, ensure_ascii=False))
         except Exception:
             pass

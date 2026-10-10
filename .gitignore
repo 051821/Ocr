@@ -44,4 +44,5 @@ outputs/
 # Model/cache folders
 .paddlex/
 .cache/
+.pytest_cache/
 logs/

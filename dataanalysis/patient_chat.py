@@ -10,6 +10,7 @@ import time
 from collections import Counter
 from datetime import datetime, timezone
 
+from core.config import CHAT_MODEL
 from core.llm_client import complete as llm_complete
 from medication_journey import compute_medication_journey
 from storage.ai_analysis_csv import get_llm_cache, set_llm_cache
@@ -906,7 +907,7 @@ def _answer_patient_question(patient_data, patient_id, question, history=None, a
     })
 
     try:
-        response = llm_complete(messages, "chat", api_key=api_key, model="google/gemini-2.5-flash", temperature=0.1, max_tokens=450, cache=False)
+        response = llm_complete(messages, "chat", api_key=api_key, model=CHAT_MODEL, temperature=0.1, max_tokens=450, cache=False)
         meta["path"] = "llm"
         usage = response.get("usage") or {}
         meta.update(

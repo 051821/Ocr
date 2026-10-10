@@ -5,7 +5,15 @@ import logging
 import time
 
 import requests
-from core.config import DEFAULT_MODELS, MAX_TOKENS, OPENROUTER_API_KEY, OPENROUTER_URL
+from core.config import (
+    APPROVED_MODELS,
+    DEFAULT_MODELS,
+    MAX_TOKENS,
+    OPENROUTER_API_KEY,
+    OPENROUTER_URL,
+    flag,
+    get_openrouter_api_key,
+)
 
 try:
     from storage.ai_analysis_csv import get_llm_cache, set_llm_cache
@@ -27,12 +35,21 @@ def _cache_key(task, messages, models, temperature, max_tokens):
 
 def complete(messages, task, api_key=None, model=None, temperature=0.1, max_tokens=None, cache=True):
     """Return a cached or generated response with model and usage metadata."""
-    key = api_key if api_key is not None else OPENROUTER_API_KEY
-    if not key:
-        raise RuntimeError("OpenRouter API key is not configured")
+    if flag("ENABLE_HARDENED_CONFIG"):
+        key = get_openrouter_api_key(api_key)
+        active_models = (model,) if model else tuple(m for m in DEFAULT_MODELS if not m.endswith(":free"))
+        for m in active_models:
+            if m not in APPROVED_MODELS:
+                raise ValueError(f"Model '{m}' is not in the approved models allowlist.")
+    else:
+        key = api_key if api_key is not None else OPENROUTER_API_KEY
+        if not key:
+            raise RuntimeError("OpenRouter API key is not configured")
+        active_models = (model,) if model else DEFAULT_MODELS
+
     temperature = min(float(temperature), 0.2)
     max_tokens = int(max_tokens or MAX_TOKENS[task])
-    models = (model,) if model else DEFAULT_MODELS
+    models = active_models
     cache_key = _cache_key(task, messages, models, temperature, max_tokens)
     if cache:
         try:

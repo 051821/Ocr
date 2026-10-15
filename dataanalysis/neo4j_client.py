@@ -252,17 +252,26 @@ def query_patient_graph(patient_id: str, limit: int = 100) -> list:
     if not driver:
         return []
     database = os.getenv("NEO4J_DATABASE") or os.getenv("NEO4J_DB_NAME") or "neo4j"
+    # Newest visits first, so a limit drops the oldest facts rather than an arbitrary set;
+    # "Unknown" dates sort last instead of ahead of every real date.
     cypher = """
         MATCH (:Patient {id:$patient_id})-[:HAS_VISIT]->(v:Visit)
         OPTIONAL MATCH (v)-[r]->(node)
         WHERE type(r) IN ['RX', 'DX', 'LAB', 'HAS_DOC']
         RETURN properties(v) AS visit, type(r) AS relation, labels(node) AS labels,
                properties(node) AS node, properties(r) AS relationship
+        ORDER BY CASE WHEN v.date = 'Unknown' THEN 1 ELSE 0 END, v.date DESC, v.id,
+                 type(r), coalesce(node.name, node.id)
         LIMIT $limit
     """
+    limit = max(1, int(limit))
     try:
         with driver.session(database=database) as session:
-            rows = session.run(cypher, patient_id=str(patient_id), limit=max(1, int(limit)))
+            # Fetch one extra row to know whether the limit cut anything off.
+            rows = list(session.run(cypher, patient_id=str(patient_id), limit=limit + 1))
+            if len(rows) > limit:
+                logger.warning("Neo4j graph facts for patient %s truncated to the %d most recent", patient_id, limit)
+                rows = rows[:limit]
             output = []
             for record in rows:
                 row = dict(record)

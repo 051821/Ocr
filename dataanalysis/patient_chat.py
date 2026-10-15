@@ -17,7 +17,7 @@ from core.llm_client import complete as llm_complete
 from medication_journey import compute_medication_journey
 from storage.ai_analysis_csv import get_llm_cache, set_llm_cache
 from neo4j_client import is_neo4j_configured, query_patient_graph
-from review_rules import sanitize_chat_answer
+from review_rules import sanitize_chat_answer, strip_care_suggestions
 from review_facts import unlinked_signature
 
 
@@ -47,6 +47,13 @@ if not audit_logger.handlers:
 
 _SALT_WARNED = False
 
+# Applied to every chat prompt: the chat reports the record, it never proposes care.
+_NO_SUGGESTIONS_RULE = (
+    "Never suggest, recommend or name a medicine, supplement, dose change, or lab test/investigation for the patient "
+    "to start, add, stop, repeat, order or check - not even as 'consider' or 'may need'. If the record itself documents "
+    "such advice (e.g. a consult note advising a repeat test), report it as documented, with the encounter."
+)
+
 _BASE_PROMPT = (
     "You are an expert Clinical AI Assistant specializing in longitudinal patient records, medical journeys, and condition tracking.\n"
     "Format: start with '### Answer'; do not write an Evidence section (it is added automatically). "
@@ -54,27 +61,28 @@ _BASE_PROMPT = (
     "Never call a value abnormal/high/low unless the evidence explicitly does.\n"
     "Respect visit constraints ('in visit 1', 'after visit 3', 'latest').\n"
     "State medication shifts (started/dose changed/continued/discontinued) with encounter+date.\n"
-    "Do not suggest new prescriptions or speculative diagnoses."
+    "Do not give speculative diagnoses.\n" + _NO_SUGGESTIONS_RULE
 )
 
 _SIDE_EFFECT_RULE = (
     "\nMedication Side Effects & Safety: When asked about side effects or adverse reactions for any medication:\n"
     "- Actively list the established clinical side effects, adverse reactions, and safety warnings from medical pharmacology knowledge. Do not state that side effects are absent from the record; explain them for the clinician.\n"
     "- Connect directly to this patient's record: specify when the medication was prescribed (Encounter #, Date, dosage/instructions), and note whether any adverse reactions were reported in the clinical notes.\n"
-    "- Outline practical warning signs and red flags the patient should monitor."
+    "- Name the warning signs and red-flag symptoms to watch for."
 )
 
 _LAB_RULE = (
     "\nLaboratory Values & Clinical Indications: When asked what lab findings or test results indicate, mean, or signify:\n"
     "- Provide the medical significance and clinical causes of the abnormal value (whether elevated/high or decreased/low), using your medical knowledge.\n"
     "- Do not restrict your answer to the literal text of lab notes or report footnotes; actively explain what the low or high finding clinically implies (potential etiologies, metabolic causes, medication effects).\n"
-    "- Connect and correlate the findings with the patient's documented diagnoses, symptoms, and prescribed treatment regimen."
+    "- Connect and correlate the findings with the patient's documented diagnoses, symptoms, and prescribed treatment regimen.\n"
+    "- Do not suggest further, repeat or confirmatory tests."
 )
 
 _LIFESTYLE_RULE = (
     "\nLifestyle & Dietary Advice: Provide evidence-based, non-prescription guidance for the patient's documented "
-    "conditions: dietary recommendations, physical activity, monitoring tips, trigger avoidance. "
-    "Do NOT suggest new medicines. Frame as general wellness support."
+    "conditions: dietary recommendations, physical activity, trigger avoidance. "
+    "Do NOT suggest medicines, supplements or lab tests. Frame as general wellness support."
 )
 
 _EMERGENCY_PATTERN = re.compile(
@@ -86,12 +94,16 @@ _EMERGENCY_NOTICE = "If this is an emergency, seek urgent medical care now."
 
 _PERSONALIZE_RULE = (
     "\nThis is a personalized chatbot: link the answer to THIS patient using the PATIENT CONTEXT block. "
-    "Write 2 short paragraphs (at most 130 words in total), plain language, no sub-headings: "
-    "(1) what the finding means; (2) how it links to the patient's documented diagnosis (and how long it has been followed), "
-    "their current medicines, related lab values, and any related complaints in the record, citing the encounter numbers "
-    "(e.g. 'blurred vision noted at Encounters #1-#2'). Mention a complaint only if it is clinically related. "
+    "Answer ONLY in Markdown bullet points ('- '), plain language, no paragraphs and no sub-headings. "
+    "The first bullet answers the question directly. Then one bullet per relevant fact: what the finding means; "
+    "the related diagnosis (and how long it has been followed); current medicines; related lab values with their status; "
+    "related complaints - each with encounter numbers and dates (e.g. 'blurred vision at Encounters #1-#2'). "
+    "Use 3 to 6 bullets, each at most 25 words, about 120 words in total. Keep every relevant value, date, encounter "
+    "number and medicine change; drop filler, repetition and anything not tied to the question. "
+    "Mention a complaint only if it is clinically related. "
     "Use each lab status exactly as given (Not evaluated is not High); call values from documents not linked to a visit undated. "
-    "End with one line 'For clinician review: ...' only when something needs review. Do not prescribe or change medicines."
+    "Optionally end with one bullet '- For clinician review: ...' pointing at a record fact that needs review "
+    "(a gap, conflict or abnormal value), never at a test or medicine to order. " + _NO_SUGGESTIONS_RULE
 )
 
 SYSTEM_PROMPT = _BASE_PROMPT + _SIDE_EFFECT_RULE + _LAB_RULE + _LIFESTYLE_RULE
@@ -116,6 +128,12 @@ _RECORD_TERMS = {
     "indicates", "indication", "mean", "meaning", "signify", "triglycerides", "lipid", "cholesterol",
     "bp", "spo2", "oxygen", "saturation", "height", "bmi", "temp", "hr", "rate",
     "unlinked", "linked", "unassigned", "doc", "docs",
+    # everyday names for drug classes ("which painkillers should be avoided?")
+    "painkiller", "painkillers", "analgesic", "analgesics", "nsaid", "nsaids", "antibiotic", "antibiotics",
+    "tablet", "tablets", "dose", "dosage",
+    # care events and examinations that produce record documents
+    "hospital", "admission", "admitted", "discharge", "hospitalisation", "hospitalization", "surgery",
+    "procedure", "examination", "exam", "scan", "report", "reports", "consult", "consultation", "referral",
 }
 
 _UNLINKED_TERMS = {"unlinked", "linked", "unassigned", "orphan"}
@@ -143,6 +161,13 @@ _SYNONYMS = {
     "followup": "follow up",
     "encounter": "visit",
     "encounters": "visit",
+    "painkiller": "painkiller nsaids analgesic",
+    "painkillers": "painkiller nsaids analgesic",
+    "avoided": "avoid",
+    "kidney": "kidney renal creatinine egfr",
+    "renal": "renal kidney creatinine egfr",
+    "eye": "eye fundus retinopathy",
+    "eyes": "eye fundus retinopathy",
 }
 
 
@@ -217,6 +242,27 @@ def _patient_diagnoses(patient_data):
     return diag_words
 
 
+def _strip_suggestions(text, patient_data):
+    """Always-on guard: drop any medicine or lab-test suggestion the LLM wrote despite the prompt."""
+    labs = {lab.get("test_name") for v in patient_data.get("visits", []) or [] for lab in v.get("lab_results") or []}
+    labs |= {lab.get("test_name") for d in patient_data.get("unlinked_documents", []) or [] for lab in d.get("lab_results") or []}
+    return strip_care_suggestions(text, medicines=_medication_names(patient_data), labs=labs)
+
+
+def _patient_record_words(patient_data):
+    """Words from this patient's document labels, impressions and diagnoses ("Renal ultrasound" -> ultrasound),
+    so questions about what is actually in the record are routed to it. Raw OCR text is left out on purpose:
+    it is full of everyday words that would let off-topic questions through."""
+    docs = [d for v in patient_data.get("visits", []) or [] for d in v.get("documents", []) or []]
+    docs += patient_data.get("unlinked_documents", []) or []
+    texts = [d.get("document_label") for d in docs]
+    texts += [(d.get("clinical_summary") or {}).get("clinical_impression") for d in docs]
+    for visit in patient_data.get("visits", []) or []:
+        texts += [visit.get("provisional_diagnosis"), visit.get("confirmed_diagnosis"),
+                  visit.get("db_provisional_dx"), visit.get("db_confirmed_dx")]
+    return {word for text in texts if text for word in _tokens(str(text)) if len(word) > 3} | _patient_diagnoses(patient_data)
+
+
 _LIFESTYLE_TERMS = {
     "lifestyle", "diet", "dietary", "food", "foods", "exercise", "activity", "activities",
     "routine", "manage", "management", "maintain", "maintaining", "control", "controlling",
@@ -239,7 +285,8 @@ def route_question(question, patient_data):
     """Classify with whole words so substrings such as latest/test never match."""
     tokens = set(_tokens(question))
     med_names = {word for name in _medication_names(patient_data) for word in _tokens(name)}
-    if tokens & _RECORD_TERMS or tokens & med_names:
+    if (tokens & _RECORD_TERMS or tokens & med_names or tokens & _patient_lab_tokens(patient_data).keys()
+            or tokens & _patient_record_words(patient_data)):
         return "patient_record"
     if tokens & {"side", "effect", "effects", "interaction", "interactions"} and med_names:
         return "general_medical_about_patient_meds"
@@ -317,6 +364,30 @@ def _unlinked_source(doc, category, content, source_id):
 
 def _lab_is_abnormal(lab):
     return any(w in str(lab.get("status") or "").casefold() for w in ("abnormal", "high", "low", "elevated", "decreased"))
+
+
+# Words shared by many test names ("serum creatinine", "serum sodium") that would match unrelated labs.
+# Generic words that make a question about labs; specific tests come from the patient's own record
+# (_patient_lab_tokens) so no single condition's tests get special treatment.
+_LAB_QUESTION_TERMS = {"lab", "labs", "test", "tests", "report", "reports", "indicate", "indication",
+                       "abnormal", "mean", "means"}
+
+# Context budget for the LLM: rule-matched evidence is guaranteed _RULE_SLOTS of the entries.
+_PACK_MAX_ENTRIES, _PACK_MAX_WORDS, _RULE_SLOTS = 8, 450, 4
+
+_LAB_NAME_QUALIFIERS = {"serum", "plasma", "blood", "total", "count", "fasting", "random"}
+
+
+def _patient_lab_tokens(patient_data):
+    """Map each word of this patient's own lab test names to whether any test carrying it was abnormal."""
+    labs = [lab for v in patient_data.get("visits", []) or [] for lab in v.get("lab_results") or []] + \
+           [lab for d in patient_data.get("unlinked_documents", []) or [] for lab in d.get("lab_results") or []]
+    tokens = {}
+    for lab in labs:
+        for token in _tokens(lab.get("test_name") or ""):
+            if len(token) >= 3 and token not in _LAB_GENERIC and token not in _LAB_NAME_QUALIFIERS:
+                tokens[token] = tokens.get(token, False) or _lab_is_abnormal(lab)
+    return tokens
 
 
 def _status_badge(status):
@@ -554,14 +625,15 @@ def _deterministic_trend_answer(trend, title):
 
 _TREND_PROMPT = (
     "You are a clinical-record review assistant. Using ONLY the JSON facts, write a longitudinal condition trend "
-    "for a clinician. Do not diagnose, prescribe or recommend medication changes; do not invent values. "
+    "for a clinician. Do not diagnose or invent values. " + _NO_SUGGESTIONS_RULE + " "
     "Labs whose source says 'not linked to a visit' are undated: call them 'undated reports', never 'recent'.\n"
     "Format exactly (Markdown, no other headings, at most 180 words, short sentences):\n"
     "**Overall picture:** 2 sentences.\n\n"
     "**Condition trends:**\n"
     "- **<condition>** (<first> to <last>, <n> visits): evolution, medicines, key lab values. One sentence or two.\n"
     "Use the visit counts exactly as given; chronic conditions first.\n\n"
-    "**Points for clinician review:**\n- 2-3 short bullets (abnormal values, gaps, missed follow-ups, unlinked records)."
+    "**Points for clinician review:**\n- 2-3 short bullets naming record facts only (abnormal values, gaps, missed "
+    "follow-ups, unlinked records), never a test or medicine to order."
 )
 
 
@@ -593,6 +665,7 @@ def _answer_trend(patient_data, patient_id, api_key, meta):
         meta.update(path="llm", model=response.get("model"), prompt_tokens=usage.get("prompt_tokens", 0),
                     completion_tokens=usage.get("completion_tokens", 0), total_tokens=usage.get("total_tokens", 0))
         body = re.sub(r"(?im)^#+\s*(answer|evidence)\s*$", "", response["content"]).strip()
+        body = _strip_suggestions(body, patient_data)
         if flag("ENABLE_CHAT_OUTPUT_SANITIZER"):
             body = sanitize_chat_answer(body)
         if not body:
@@ -1095,18 +1168,37 @@ def _answer_simple(patient_data, question, meta=None):
             meta["rule"] = "history_summary"
         return f"### Answer\n{answer_text}\n\n### Evidence\n- {len(visits)} encounter(s) from {first_d} to {last_d}", all_evidence
 
-    # 4. Vitals lookup (latest OR all encounters)
+    # 4. Vitals lookup (one named visit, latest, OR all encounters)
+    # "BP of visit 1" names a visit without in/at/during; for vitals that still means that visit.
+    vitals_visit = v_num if rel == "in" else None
+    if rel is None:
+        m_visit = re.search(r"\b(?:visit|encounter|v)\s*#?\s*(\d+)\b", _normalize_query_text(question).casefold())
+        vitals_visit = int(m_visit.group(1)) if m_visit else None
     if (
         q & _VITALS_TERMS
         and not is_interpret_query
         and not q & {"trend", "trends", "compare", "over", "progress", "tips", "advice", "manage"}
+        # before/after a visit, or a visit that doesn't exist, needs retrieval rather than one reading
+        and rel in (None, "in")
+        and (vitals_visit is None or 1 <= vitals_visit <= len(visits))
     ):
+        if vitals_visit is not None:
+            v = visits[vitals_visit - 1]
+            rows = [r for r in (v.get("db_vitals_rows") or []) if isinstance(r, dict) and r.get("label")]
+            if meta is not None: meta["rule"] = "vitals_visit"
+            ev_line = f"Encounter #{vitals_visit} · {_date(v)} · Visit {v.get('visit_id')}"
+            if not rows:
+                return f"### Answer\nNo vitals are documented for Encounter #{vitals_visit} ({_date(v)}).\n\n### Evidence\n- {ev_line}", []
+            text = "; ".join(f"{r['label']}: {r.get('value', '')}" for r in rows)
+            return (f"### Answer\nEncounter #{vitals_visit} ({_date(v)}): {text}\n\n### Evidence\n- {ev_line}",
+                    [_source(v, "vitals", text, visit_index=vitals_visit)])
         if q & {"latest", "last", "current", "recent"} or not q & {"all", "every", "history", "across", "each"}:
-            for v in reversed(visits):
+            for idx in range(len(visits), 0, -1):
+                v = visits[idx - 1]
                 rows = [r for r in (v.get("db_vitals_rows") or []) if isinstance(r, dict) and r.get("label")]
                 if rows:
                     text = "; ".join(f"{r['label']}: {r.get('value', '')}" for r in rows)
-                    evidence = [_source(v, "vitals", text, visit_index=len(visits))]
+                    evidence = [_source(v, "vitals", text, visit_index=idx)]
                     if meta is not None: meta["rule"] = "vitals_latest"
                     return f"### Answer\n{text}\n\n### Evidence\n- {_date(v)} · Visit {v.get('visit_id')}", evidence
         else:
@@ -1320,7 +1412,7 @@ def build_patient_index(patient_data):
     return [entry for entry in entries if entry["content"]]
 
 
-def _bm25(query, entries, limit=10, target_visit_rel=None, target_visit_num=None):
+def _bm25(query, entries, limit=10, target_visit_rel=None, target_visit_num=None, with_scores=False, lab_terms=()):
     terms = _tokens(query)
     if not terms:
         return []
@@ -1329,7 +1421,7 @@ def _bm25(query, entries, limit=10, target_visit_rel=None, target_visit_num=None
     average = sum(sum(doc.values()) for doc in docs) / total or 1
     scores = []
     is_side_effect_q = any(w in terms for w in ("side", "effect", "effects", "adverse", "reaction", "reactions", "toxicity", "risk", "warning"))
-    is_lab_q = any(w in terms for w in ("lab", "labs", "test", "hba1c", "triglycerides", "lipid", "cholesterol", "glucose", "pcv", "tlc", "indicate", "indication", "mean", "means"))
+    is_lab_q = bool(set(terms) & (_LAB_QUESTION_TERMS | set(lab_terms)))
     is_vitals_q = any(w in terms for w in _VITALS_TERMS)
     is_unlinked_q = any(w in terms for w in _UNLINKED_TERMS)
     is_lifestyle_q = any(w in terms for w in ("lifestyle", "diet", "dietary", "food", "exercise", "maintain", "manage", "suggest", "advice", "tips", "idea", "prevent", "avoid", "trigger", "wellness", "self", "care"))
@@ -1378,7 +1470,8 @@ def _bm25(query, entries, limit=10, target_visit_rel=None, target_visit_num=None
 
         if score > 0:
             scores.append((score, entry))
-    return [entry for _, entry in sorted(scores, key=lambda item: item[0], reverse=True)[:limit]]
+    ranked = sorted(scores, key=lambda item: item[0], reverse=True)[:limit]
+    return ranked if with_scores else [entry for _, entry in ranked]
 
 
 def _retrieval_query(question, history):
@@ -1416,10 +1509,17 @@ def _answer_patient_question(patient_data, patient_id, question, history=None, a
     rel, v_num = _extract_visit_constraints(question)
     q_tokens = _tokens(question)
     is_side_effect_q = any(w in q_tokens for w in ("side", "effect", "effects", "adverse", "reaction", "reactions", "toxicity", "warning"))
-    is_lab_q = any(w in q_tokens for w in ("lab", "labs", "test", "hba1c", "triglycerides", "lipid", "cholesterol", "glucose", "pcv", "tlc", "indicate", "indication", "abnormal", "mean", "means"))
+    lab_tokens = _patient_lab_tokens(patient_data)
+    named_labs = set(q_tokens) & lab_tokens.keys()
+    is_lab_q = bool(named_labs) or bool(set(q_tokens) & _LAB_QUESTION_TERMS)
     is_lifestyle_q = any(w in q_tokens for w in ("lifestyle", "diet", "dietary", "food", "exercise", "maintain", "manage", "suggest", "advice", "tips", "idea", "prevent", "avoid", "trigger", "wellness", "self", "care"))
 
-    evidence = _bm25(_retrieval_query(question, history), index, limit=10, target_visit_rel=rel, target_visit_num=v_num)
+    scored = _bm25(_retrieval_query(question, history), index, limit=None,
+                   target_visit_rel=rel, target_visit_num=v_num, with_scores=True, lab_terms=lab_tokens.keys())
+    score_of = {id(entry): score for score, entry in scored}
+    # Rule-matched entries are kept apart from the BM25 ranking so the packing budget can't silently drop them:
+    # pinned = exact target of the question, matched = question-type rules, filler = only if room is left.
+    pinned, matched, filler = [], [], []
 
     # 1. Temporal injection
     if rel and v_num is not None:
@@ -1432,8 +1532,7 @@ def _answer_patient_question(patient_data, patient_id, question, history=None, a
                     or (rel == "before" and v_idx < v_num)
                 )
                 if is_match and entry.get("category") in ("medication change", "encounter summary"):
-                    if entry not in evidence:
-                        evidence.append(entry)
+                    matched.append(entry)
 
     # 2. Side effect injection: fuzzy-match drug name (handles OCR typos e.g. Domperidome→Domperidone)
     if is_side_effect_q:
@@ -1448,46 +1547,59 @@ def _answer_patient_question(patient_data, patient_id, question, history=None, a
         for entry in index:
             if entry.get("category") == "medication side effects reference":
                 if _drug_match(entry.get("source_id", "")):
-                    if entry not in evidence:
-                        evidence.insert(0, entry)
-                # Also inject when LLM can use all patient's medication names as context
-                elif entry not in evidence and len(evidence) < 4:
-                    evidence.append(entry)  # give LLM patient-specific med context
+                    pinned.append(entry)
+                else:
+                    filler.append(entry)  # other patient medicines: context only when there is room
             elif entry.get("category") in ("medication change", "medications"):
                 med_name = str(entry.get("source_id", "")).lower()
                 if med_name and _drug_match(med_name):
-                    if entry not in evidence:
-                        evidence.append(entry)
+                    matched.append(entry)
+        # Notes that mention the asked-about drug can document this patient's own reaction to it
+        asked_drugs = [str(e.get("source_id", "")).lower() for e in pinned if e.get("source_id")]
+        for entry in index:
+            if entry.get("category") in ("document", "document findings", "unlinked document", "unlinked document findings"):
+                if any(name in entry.get("content", "").lower() for name in asked_drugs):
+                    matched.append(entry)
 
-    # 3. Lab injection: include the specific lab entry + documents with clinical impression about it
+    # 3. Lab injection: the tests named in the question, or else this patient's own abnormal tests
     if is_lab_q:
-        q_long = [t for t in q_tokens if len(t) >= 4]
+        target_labs = named_labs or {t for t, abnormal in lab_tokens.items() if abnormal}
         for entry in index:
             cat = entry.get("category", "")
-            content_low = entry.get("content", "").lower()
-            if cat in ("laboratory result", "encounter summary", "patient diagnoses overview"):
-                # Match if any query lab-name token appears in content
-                if any(t in content_low for t in q_long) or any(w in content_low for w in ("abnormal", "hba1c", "triglycerides", "glucose", "pcv", "diabetes", "t2dm", "hypert")):
-                    if entry not in evidence:
-                        evidence.append(entry)
-            elif cat in ("document", "document findings"):
-                # Clinical documents often have impressions about what elevated/low values mean
-                if any(t in content_low for t in q_long):
-                    if entry not in evidence:
-                        evidence.append(entry)
+            content_tokens = set(_tokens(entry.get("content", "")))
+            if cat == "patient diagnoses overview":
+                # The patient's own diagnoses are the context for interpreting any lab value
+                matched.append(entry)
+            elif cat in ("laboratory result", "encounter summary", "document", "document findings"):
+                # Documents often carry the clinical impression of what a high/low value means
+                if content_tokens & target_labs or (not named_labs and cat == "laboratory result" and "abnormal" in content_tokens):
+                    matched.append(entry)
 
     # 4. Lifestyle/dietary advice injection: always include diagnoses overview + encounter summaries
     if is_lifestyle_q:
         for entry in index:
             if entry.get("category") in ("patient diagnoses overview", "encounter summary"):
-                if entry not in evidence:
-                    evidence.append(entry)
+                matched.append(entry)
+
+    # Merge: pinned, then the best rule matches (guaranteed slots), then BM25, then the rest.
+    # Within the rule matches, take the best of each category before repeating one, so a single
+    # document finding isn't crowded out by a dozen near-identical lab rows.
+    matched = list({id(entry): entry for entry in matched}.values())
+    matched.sort(key=lambda entry: score_of.get(id(entry), 0.0), reverse=True)
+    _seen_cats = set()
+    _firsts = [e for e in matched if not (e.get("category") in _seen_cats or _seen_cats.add(e.get("category")))]
+    matched = _firsts + [e for e in matched if all(e is not f for f in _firsts)]
+    evidence = pinned + matched[:_RULE_SLOTS] + [entry for _, entry in scored[:10]] + matched[_RULE_SLOTS:] + filler
+    if any(e.get("category") == "medication side effects reference" for e in pinned):
+        # A specific drug was asked about: other drugs' side-effect references are noise, wherever they came from
+        evidence = [e for e in evidence if e.get("category") != "medication side effects reference"
+                    or any(e is p for p in pinned)]
 
     if not evidence:
         meta["path"] = "no_evidence"
         return "### Answer\nThe requested information is not documented in the available patient record.\n\n### Evidence\n- No relevant patient-record evidence found.", []
 
-    # Drop duplicate content
+    # Drop duplicates (the same entry can come from several rules and BM25)
     _seen_content = set()
     _deduped = []
     for _e in evidence:
@@ -1509,14 +1621,18 @@ def _answer_patient_question(patient_data, patient_id, question, history=None, a
             or (bool(_enc_summary_vids) and e.get("category") == "longitudinal medication journey")
         )]
 
-    packed, used = [], 0
+    packed, _packed_evidence, used = [], [], 0
     for item in evidence:
+        if len(packed) >= _PACK_MAX_ENTRIES:
+            break
         enc_lbl = f"Encounter #{item.get('visit_index')}" if item.get("visit_index") else "Reference/Longitudinal"
         text = f"{item['date']} | {enc_lbl} | Visit {item['visit_id']} | [{item['category']}]\n{item['content']}"
         # 450 words is enough next to the patient context block sent with every LLM question.
-        if len(packed) >= 8 or used + len(text.split()) > 450:
-            break
+        # An entry that doesn't fit is skipped, so a shorter one further down can still be used.
+        if used + len(text.split()) > _PACK_MAX_WORDS:
+            continue
         packed.append(text)
+        _packed_evidence.append(item)
         used += len(text.split())
 
     def _build_deterministic_fallback():
@@ -1568,9 +1684,11 @@ def _answer_patient_question(patient_data, patient_id, question, history=None, a
             _chat_pv = "chat:static"
     else:
         _chat_pv = "chat:static"
-    cache_key = f"chat:v15:{sanitizer_flag_str}:{_chat_pv}:" + hashlib.blake2b((f"{source_hash or ''}|{vitals_sig}|{normalized_question}" + (f"|ul:{unlinked_signature(patient_data)}" if patient_data.get("unlinked_documents") else "")).encode(), digest_size=16).hexdigest()
-    _packed_evidence = [item for item in evidence
-                         if any(item.get("content", "")[:120] in t for t in packed)]
+    recent_history = [{"role": item["role"], "content": str(item.get("content") or "")[:400]}
+                      for item in (history or [])[-2:] if item.get("role") in {"user", "assistant"}]
+    # Follow-ups ("what are its side effects?") depend on prior turns, both in retrieval and in the prompt.
+    history_sig = hashlib.blake2b(json.dumps([recent_history, _retrieval_query(question, history)], ensure_ascii=False).encode(), digest_size=8).hexdigest()
+    cache_key = f"chat:v17:{sanitizer_flag_str}:{_chat_pv}:" + hashlib.blake2b((f"{source_hash or ''}|{vitals_sig}|{history_sig}|{normalized_question}" + (f"|ul:{unlinked_signature(patient_data)}" if patient_data.get("unlinked_documents") else "")).encode(), digest_size=16).hexdigest()
     cached = get_llm_cache(cache_key)
     if cached:
         meta["path"] = "llm_cache"
@@ -1609,10 +1727,7 @@ def _answer_patient_question(patient_data, patient_id, question, history=None, a
     else:
         evidence_content = "\n\n".join(packed)
 
-    messages = [{"role": "system", "content": _sys}]
-    for item in (history or [])[-2:]:
-        if item.get("role") in {"user", "assistant"}:
-            messages.append({"role": item["role"], "content": str(item.get("content") or "")[:400]})
+    messages = [{"role": "system", "content": _sys}, *recent_history]
     messages.append({
         "role": "user",
         "content": f"Question: {question}\n\nPatient Record Evidence:\n" + evidence_content,
@@ -1629,6 +1744,9 @@ def _answer_patient_question(patient_data, patient_id, question, history=None, a
             total_tokens=usage.get("total_tokens", 0),
         )
         answer = re.split(r"(?im)^#+\s*evidence\s*$", response["content"].strip())[0].strip()
+        answer = _strip_suggestions(answer, patient_data)
+        if not answer.replace("### Answer", "").strip():
+            raise ValueError("answer was only medicine/test suggestions")
         if "### Answer" not in answer:
             answer = "### Answer\n" + answer
         answer += "\n\n### Evidence\n" + _evidence_lines(_packed_evidence or evidence)
@@ -1657,7 +1775,7 @@ def _answer_patient_question(patient_data, patient_id, question, history=None, a
             if not answer.startswith(_EMERGENCY_NOTICE):
                 answer = f"{_EMERGENCY_NOTICE}\n\n{answer}"
 
-    return answer, (_packed_evidence if "_packed_evidence" in dir() else evidence)
+    return answer, _packed_evidence
 
 
 def answer_patient_question(

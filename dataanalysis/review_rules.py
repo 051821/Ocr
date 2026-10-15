@@ -205,3 +205,69 @@ def sanitize_chat_answer(answer_text: str) -> str:
 
     cleaned = "\n".join(result_lines).strip()
     return cleaned
+
+
+# A suggestion phrase in the assistant's own voice ...
+_SUGGESTION_CUE = re.compile(
+    r"\b(?:consider(?:ing)?|recommend(?:ed|s|ing)?|suggest(?:ed)?|advisable|should|may need|might need|"
+    r"needs? to|would benefit|warrant(?:s|ed)?|it is (?:important|advisable|prudent) to)\b",
+    re.I,
+)
+_PASSIVE_CUES = {"recommended", "suggested", "advisable", "warranted"}
+_TEST_WORDS = (r"tests?|testing|labs?|panel|screening|investigations?|work-?up|scan|x-?ray|ultrasound|ecg|"
+               r"echo(?:cardiogram)?|repeat(?:ing|ed)?|re-?check(?:ing)?")
+_MEDICINE_WORDS = (r"medicines?|medications?|drugs?|doses?|dosage|dosing|supplements?|tablets?|capsules?|"
+                   r"prescri\w*|therapy|titrat\w*|initiat\w*")
+# A change of treatment ("dose may need adjustment"); only counts when a medicine is named in the sentence,
+# so lifestyle advice ("should start walking") is left alone.
+_CHANGE_WORDS = re.compile(r"\b(?:adjust\w*|increas\w*|decreas\w*|reduc\w*|chang\w*|stop\w*|start\w*|switch\w*|"
+                           r"add\w*|review\w*|optimi[sz]\w*)\b", re.I)
+# Advice the record itself documents is reported, not suggested.
+_DOCUMENTED = re.compile(r"\b(?:documented|recorded|per the record|in the record)\b|"
+                         r"\b(?:note|consult\w*|report|clinician|doctor|physician|specialist)\s+"
+                         r"(?:advised|recommended|suggested)\b", re.I)
+
+
+def _word_alternation(base, names):
+    names = [re.escape(str(n).strip()) for n in names if n and len(str(n).strip()) >= 3]
+    return re.compile(r"\b(?:" + "|".join([base] + names) + r")\b", re.I)
+
+
+def strip_care_suggestions(answer_text: str, medicines=(), labs=()) -> str:
+    """Remove sentences that suggest a medicine or a lab test; drop a bullet left empty.
+
+    Runs on every chat answer regardless of feature flags: the chat reports the record and
+    never proposes care. medicines/labs are this patient's own names, so "consider repeating TSH"
+    is caught as well as generic wording.
+    """
+    if not answer_text or not isinstance(answer_text, str):
+        return ""
+    medicine = _word_alternation(_MEDICINE_WORDS, medicines)
+    target = _word_alternation(_TEST_WORDS + "|" + _MEDICINE_WORDS, list(medicines) + list(labs))
+
+    def is_suggestion(sentence):
+        cue = _SUGGESTION_CUE.search(sentence)
+        if not cue or _DOCUMENTED.search(sentence):
+            return False
+        # Passive wording puts the target first ("a lipid panel is recommended").
+        start = 0 if cue.group().casefold() in _PASSIVE_CUES else cue.start()
+        if target.search(sentence, start):
+            return True
+        # A treatment change only counts next to a medicine ("dose may need review", "stop metformin"),
+        # not "metformin should be taken with food to reduce nausea".
+        return any(medicine.search(sentence[max(0, m.start() - 25):m.end() + 25])
+                   for m in _CHANGE_WORDS.finditer(sentence, cue.start()))
+
+    out = []
+    for raw in answer_text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or not _SUGGESTION_CUE.search(line):
+            out.append(raw)
+            continue
+        bullet = re.match(r"^(\s*(?:[-*•]|\d+[.)])\s+)", raw)
+        prefix = bullet.group(1) if bullet else ""
+        body = raw[len(prefix):]
+        kept = [s for s in re.split(r"(?<=[.!?;])\s+", body.strip()) if s and not is_suggestion(s)]
+        if kept:
+            out.append(prefix + " ".join(kept))
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()

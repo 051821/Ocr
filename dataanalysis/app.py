@@ -801,23 +801,38 @@ def _toggle_assistant():
     st.session_state["assistant_open"] = not st.session_state.get("assistant_open", False)
 
 
+def _split_evidence(content):
+    """Split an answer into its body and its '### Evidence' section (shown only on request)."""
+    parts = re.split(r"(?im)^#+\s*evidence\s*$", content or "", maxsplit=1)
+    return parts[0].rstrip(), (parts[1].strip() if len(parts) > 1 else "")
+
+
 def _render_chat_message(message, expanded=False):
     with st.chat_message(message["role"]):
-        if message["role"] == "assistant":
-            meta = message.get("meta")
-            st.caption(_chat_label(meta) if meta is not None else "LLM-generated response")
-        st.markdown(message["content"])
-        if message["role"] == "assistant" and "retrieved_evidence" in message:
-            with st.expander(f"RAG retrieved {len(message['retrieved_evidence'])} item(s)", expanded=expanded):
-                if message["retrieved_evidence"]:
-                    for item in message["retrieved_evidence"]:
-                        st.markdown(
-                            f"**{item.get('date', 'Date not recorded')} · {item.get('category', 'Evidence')}**  "
-                            f"\nVisit: {item.get('visit_id', 'Unknown')} · Source: {item.get('source_id', 'Unknown')}"
-                        )
-                        st.write(item.get("content", ""))
-                else:
+        if message["role"] != "assistant":
+            st.markdown(message["content"])
+            return
+        meta = message.get("meta")
+        st.caption(_chat_label(meta) if meta is not None else "LLM-generated response")
+        body, evidence_md = _split_evidence(message["content"])
+        st.markdown(body)
+        retrieved = message.get("retrieved_evidence")
+        if not evidence_md and retrieved is None:
+            return
+        # Evidence stays collapsed so the answer reads cleanly; open it to check the sources.
+        with st.expander("Evidence", expanded=expanded):
+            if evidence_md:
+                st.markdown(evidence_md)
+            if retrieved is not None:
+                st.caption(f"RAG retrieved {len(retrieved)} item(s)")
+                if not retrieved:
                     st.caption("No relevant evidence was retrieved for this question.")
+                for item in retrieved:
+                    st.markdown(
+                        f"**{item.get('date', 'Date not recorded')} · {item.get('category', 'Evidence')}**  "
+                        f"\nVisit: {item.get('visit_id', 'Unknown')} · Source: {item.get('source_id', 'Unknown')}"
+                    )
+                    st.write(item.get("content", ""))
 
 
 def _toggle_assistant_size():

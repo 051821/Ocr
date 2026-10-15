@@ -27,7 +27,9 @@ importlib.reload(core.config)
 importlib.reload(core.llm_client)
 import ui_components
 importlib.reload(ui_components)
-from ui_components import esc, render_clinical_encounter, render_doctor_friendly_ai_review
+from ui_components import esc, render_clinical_course, render_clinical_encounter, render_clinical_snapshot, render_doctor_friendly_ai_review, render_unlinked_documents, unlinked_link_text
+import clinical_snapshot
+importlib.reload(clinical_snapshot)
 try:
     from config import OPENROUTER_API_KEY as CHAT_API_KEY
 except Exception:
@@ -36,8 +38,12 @@ except Exception:
 logger = logging.getLogger(__name__)
 
 
+# Bump when the shape of fetched patient data changes so cached sessions refetch.
+DATA_VERSION = 2
+
+
 @st.cache_data(ttl=300)
-def _fetch_patient_history_cached(patient_id):
+def _fetch_patient_history_cached(patient_id, data_version=DATA_VERSION):
     return fetch_patient_history(patient_id)
 
 st.set_page_config(
@@ -47,435 +53,9 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Clean Clinical SaaS Stylesheet ───────────────────────────────────────────
-st.markdown("""
-<style>
-/* Base Theme & Layout */
-.main .block-container {
-    padding-top: 1.5rem;
-    padding-bottom: 2.5rem;
-    max-width: 1400px;
-}
-
-/* Typography Hierarchy */
-.app-brand {
-    font-size: 1.85rem;
-    font-weight: 700;
-    color: #0F172A;
-    letter-spacing: -0.02em;
-    margin-bottom: 0.15rem;
-}
-.app-subtitle {
-    font-size: 0.92rem;
-    color: #64748B;
-    margin-bottom: 0.8rem;
-    font-weight: 400;
-}
-.section-title {
-    font-size: 1.15rem;
-    font-weight: 650;
-    color: #1E293B;
-    margin-top: 1.2rem;
-    margin-bottom: 0.6rem;
-    letter-spacing: -0.01em;
-}
-
-/* Clinical Notices & Banners */
-.clinical-notice {
-    background-color: #F8FAFC;
-    border-left: 3px solid #0284C7;
-    border-radius: 4px;
-    padding: 8px 14px;
-    font-size: 0.82rem;
-    color: #334155;
-    margin-bottom: 1rem;
-    line-height: 1.45;
-}
-
-/* Overview Metric Cards */
-.metric-card {
-    background: #FFFFFF;
-    border: 1px solid #E2E8F0;
-    border-radius: 6px;
-    padding: 12px 14px;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
-    height: 100%;
-}
-.metric-label {
-    font-size: 0.72rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: #64748B;
-    margin-bottom: 4px;
-}
-.metric-value {
-    font-size: 1.18rem;
-    font-weight: 650;
-    color: #0F172A;
-    line-height: 1.25;
-}
-.metric-sub {
-    font-size: 0.75rem;
-    color: #94A3B8;
-    margin-top: 3px;
-}
-
-/* Discrepancy Alert Box */
-.discrepancy-card {
-    background: #FFFBEB;
-    border: 1px solid #FDE68A;
-    border-left: 4px solid #D97706;
-    border-radius: 5px;
-    padding: 10px 14px;
-    margin-bottom: 0.6rem;
-    font-size: 0.86rem;
-    color: #92400E;
-    line-height: 1.45;
-}
-.discrepancy-title {
-    font-weight: 650;
-    color: #B45309;
-    margin-bottom: 3px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-/* Field & Detail Styling with high contrast & theme support */
-.field-row {
-    margin-bottom: 0.45rem;
-    font-size: 0.92rem;
-    line-height: 1.5;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 6px;
-}
-.field-name {
-    font-weight: 650;
-    color: #0284C7; /* Clean clinical blue for clear recognition */
-    min-width: 140px;
-}
-.field-val {
-    color: inherit;
-    font-weight: 500;
-}
-.field-na {
-    color: #94A3B8;
-    font-style: italic;
-}
-.section-subhead {
-    font-size: 0.78rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: #0369A1;
-    margin-top: 0.7rem;
-    margin-bottom: 0.35rem;
-    display: block;
-}
-
-/* Clean Timeline Tree Styling */
-.timeline-card {
-    border-left: 2px solid #0284C7;
-    padding-left: 14px;
-    margin-left: 6px;
-    margin-bottom: 1.2rem;
-    position: relative;
-}
-.timeline-date {
-    font-size: 0.95rem;
-    font-weight: 700;
-    color: #0284C7;
-    margin-bottom: 6px;
-}
-.diff-badge-added {
-    background: #ECFDF5; color: #047857; border: 1px solid #A7F3D0;
-    padding: 2px 7px; border-radius: 4px; font-size: 0.76rem; font-weight: 600;
-}
-.diff-badge-removed {
-    background: #FEF2F2; color: #B91C1C; border: 1px solid #FECACA;
-    padding: 2px 7px; border-radius: 4px; font-size: 0.76rem; font-weight: 600;
-}
-.diff-badge-changed {
-    background: #FFFBEB; color: #B45309; border: 1px solid #FDE68A;
-    padding: 2px 7px; border-radius: 4px; font-size: 0.76rem; font-weight: 600;
-}
-.diff-badge-stable {
-    background: #F1F5F9; color: #475569; border: 1px solid #E2E8F0;
-    padding: 2px 7px; border-radius: 4px; font-size: 0.76rem; font-weight: 600;
-}
-
-/* Clean AI Callout Container */
-.ai-narrative-card {
-    background: #F8FAFC;
-    border: 1px solid #E2E8F0;
-    border-radius: 6px;
-    padding: 14px 16px;
-    font-size: 0.90rem;
-    color: #1E293B;
-    line-height: 1.55;
-    margin-bottom: 0.75rem;
-}
-
-/* Traceability Source Badge */
-.trace-badge {
-    display: inline-block;
-    padding: 2px 7px;
-    font-size: 0.72rem;
-    font-weight: 600;
-    border-radius: 4px;
-    background: #F1F5F9;
-    color: #475569;
-    border: 1px solid #CBD5E1;
-}
-
-/* Tab bar polish */
-.stTabs [data-baseweb="tab-list"] {
-    gap: 6px;
-    border-bottom: 1px solid #E2E8F0;
-    padding-bottom: 2px;
-}
-.stTabs [data-baseweb="tab"] {
-    padding-top: 6px;
-    padding-bottom: 8px;
-    font-weight: 500;
-    font-size: 0.90rem;
-}
-
-/* Streamlit native component refinements */
-div[data-testid="stExpander"] {
-    border: 1px solid rgba(148, 163, 184, 0.25) !important;
-    border-radius: 6px !important;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.02) !important;
-    margin-bottom: 0.5rem;
-}
-
-/* ── Doctor-Friendly Clinical Timeline Styles ── */
-.badge-confirmed {
-    background: rgba(16, 185, 129, 0.15);
-    color: #34D399;
-    border: 1px solid rgba(16, 185, 129, 0.35);
-    padding: 3px 9px;
-    border-radius: 4px;
-    font-size: 0.80rem;
-    font-weight: 650;
-    display: inline-block;
-    margin-right: 4px;
-    margin-bottom: 4px;
-}
-.badge-provisional {
-    background: rgba(59, 130, 246, 0.15);
-    color: #60A5FA;
-    border: 1px solid rgba(59, 130, 246, 0.35);
-    padding: 3px 9px;
-    border-radius: 4px;
-    font-size: 0.80rem;
-    font-weight: 650;
-    display: inline-block;
-    margin-right: 4px;
-    margin-bottom: 4px;
-}
-.badge-missed {
-    background: rgba(239, 68, 68, 0.15);
-    color: #F87171;
-    border: 1px solid rgba(239, 68, 68, 0.35);
-    padding: 3px 8px;
-    border-radius: 4px;
-    font-size: 0.78rem;
-    font-weight: 650;
-    display: inline-block;
-}
-.badge-completed {
-    background: rgba(16, 185, 129, 0.15);
-    color: #34D399;
-    border: 1px solid rgba(16, 185, 129, 0.35);
-    padding: 3px 8px;
-    border-radius: 4px;
-    font-size: 0.78rem;
-    font-weight: 650;
-    display: inline-block;
-}
-.badge-pending {
-    background: rgba(245, 158, 11, 0.15);
-    color: #FBBF24;
-    border: 1px solid rgba(245, 158, 11, 0.35);
-    padding: 3px 8px;
-    border-radius: 4px;
-    font-size: 0.78rem;
-    font-weight: 650;
-    display: inline-block;
-}
-.encounter-subheading {
-    font-size: 0.80rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: #0284C7;
-    margin-bottom: 6px;
-    display: flex;
-    align-items: center;
-    gap: 4px;
-}
-.doc-clean-card {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(148, 163, 184, 0.20);
-    border-radius: 6px;
-    padding: 9px 12px;
-    margin-bottom: 6px;
-}
-.doc-label-badge {
-    font-weight: 650;
-    font-size: 0.83rem;
-    color: #0284C7;
-}
-.doc-id-badge {
-    font-size: 0.72rem;
-    color: #94A3B8;
-    font-family: monospace;
-}
-.symptom-chip {
-    display: inline-block;
-    background: rgba(59, 130, 246, 0.12);
-    color: #60A5FA;
-    border: 1px solid rgba(59, 130, 246, 0.25);
-    border-radius: 3px;
-    padding: 1px 6px;
-    font-size: 0.74rem;
-    margin-right: 4px;
-    margin-bottom: 2px;
-}
-.lab-abnormal-card {
-    background: rgba(239, 68, 68, 0.08);
-    border: 1px solid rgba(239, 68, 68, 0.25);
-    border-left: 3px solid #EF4444;
-    border-radius: 4px;
-    padding: 5px 10px;
-    margin-bottom: 4px;
-    font-size: 0.85rem;
-}
-.lab-status-tag {
-    background: rgba(239, 68, 68, 0.2);
-    color: #F87171;
-    padding: 1px 5px;
-    border-radius: 3px;
-    font-size: 0.72rem;
-    font-weight: 700;
-}
-
-/* ── Doctor-Friendly AI Clinical Review Styles ── */
-.ai-hero-card {
-    background: rgba(2, 132, 199, 0.08);
-    border: 1px solid rgba(2, 132, 199, 0.25);
-    border-left: 4.5px solid #0284C7;
-    border-radius: 8px;
-    padding: 16px 20px;
-    margin-bottom: 1.2rem;
-}
-.ai-card-title {
-    font-size: 1.05rem;
-    font-weight: 700;
-    color: #0284C7;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 8px;
-}
-.ai-hero-text {
-    font-size: 0.95rem;
-    line-height: 1.6;
-    color: inherit;
-}
-.ai-section-hdr {
-    font-size: 1.02rem;
-    font-weight: 700;
-    color: #0284C7;
-    margin-top: 1.2rem;
-    margin-bottom: 0.6rem;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-.ai-insight-card {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(148, 163, 184, 0.16);
-    border-left: 3.5px solid #3B82F6;
-    border-radius: 6px;
-    padding: 11px 15px;
-    margin-bottom: 0.55rem;
-}
-.ai-tag {
-    font-size: 0.74rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-bottom: 4px;
-    display: flex;
-    align-items: center;
-    gap: 5px;
-}
-.ai-insight-text {
-    font-size: 0.92rem;
-    line-height: 1.5;
-    color: inherit;
-}
-.ai-review-box {
-    background: rgba(245, 158, 11, 0.08);
-    border: 1px solid rgba(245, 158, 11, 0.25);
-    border-left: 4px solid #F59E0B;
-    border-radius: 6px;
-    padding: 12px 18px;
-    margin-bottom: 1.2rem;
-}
-.ai-review-title {
-    font-weight: 700;
-    color: #B45309;
-    font-size: 0.88rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-bottom: 6px;
-}
-.ai-review-list {
-    margin: 0;
-    padding-left: 1.2rem;
-    font-size: 0.90rem;
-    line-height: 1.5;
-}
-.ai-review-list li {
-    margin-bottom: 4px;
-}
-.ai-consideration-card {
-    background: rgba(16, 185, 129, 0.06);
-    border: 1px solid rgba(16, 185, 129, 0.2);
-    border-left: 3px solid #10B981;
-    border-radius: 6px;
-    padding: 10px 14px;
-    margin-bottom: 0.55rem;
-    display: flex;
-    align-items: flex-start;
-    min-height: 68px;
-}
-.evidence-chip {
-    display: inline-block;
-    background: rgba(148, 163, 184, 0.12);
-    color: #94A3B8;
-    border: 1px solid rgba(148, 163, 184, 0.25);
-    border-radius: 4px;
-    padding: 4px 9px;
-    margin: 3px;
-    font-size: 0.78rem;
-}
-.ai-declaration-footer {
-    font-size: 0.78rem;
-    color: #94A3B8;
-    border-top: 1px solid rgba(148, 163, 184, 0.2);
-    padding-top: 8px;
-    margin-top: 1.2rem;
-    font-style: italic;
-}
-</style>
-""", unsafe_allow_html=True)
+# ── Theme: light clinical palette (ui/styles.css, .streamlit/config.toml) ──────
+with open(os.path.join(DATAANALYSIS_DIR, "ui", "styles.css"), encoding="utf-8") as _css:
+    st.markdown(f"<style>{_css.read()}</style>", unsafe_allow_html=True)
 
 
 # ── Robust Safe Formatting Helpers ───────────────────────────────────────────
@@ -519,7 +99,7 @@ def _chat_label(meta):
     return "No LLM used"
 
 
-st.markdown('<div class="app-brand">Patient Intelligence</div>', unsafe_allow_html=True)
+st.markdown('<div class="app-brand">Patient Clinical Dashboard</div>', unsafe_allow_html=True)
 st.markdown('<div class="app-subtitle">Longitudinal Clinical Record & Retrospective AI Analysis</div>', unsafe_allow_html=True)
 
 st.markdown("""
@@ -530,9 +110,18 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# ── Sidebar Lookup ───────────────────────────────────────────────────────────
+# ── Sidebar: branding, navigation, patient selector ─────────────────────────
 with st.sidebar:
-    st.markdown("#### Patient Selector")
+    st.markdown(
+        '<div class="sb-brand"><div class="sb-logo">🩺</div><div>'
+        '<div class="sb-title">Clinical Intelligence Platform</div>'
+        '<div class="sb-sub">Longitudinal patient records</div></div></div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown('<div class="sb-section">Navigation</div>', unsafe_allow_html=True)
+    nav_page = st.radio("Navigation", ["Dashboard", "Patient Selector", "Reports", "Settings"],
+                        key="nav_page", label_visibility="collapsed")
+    st.markdown('<div class="sb-section">Patient Selector</div>', unsafe_allow_html=True)
     try:
         patient_ids = fetch_all_patient_ids()
     except Exception as e:
@@ -548,9 +137,55 @@ with st.sidebar:
             index=default_index,
             label_visibility="collapsed"
         )
-        st.caption(f"Total cohort in database: **{len(patient_ids)}** patients")
-    st.markdown("---")
-    st.markdown("<small style='color:#64748B;'><strong>Pipeline:</strong> Medical Records → OCR → Structured Schema → Retrospective AI</small>", unsafe_allow_html=True)
+        st.caption(f"{len(patient_ids)} patients in database")
+        # A new pick in the sidebar switches the dashboard to that patient.
+        last_pick = st.session_state.get("_sidebar_pick")
+        if last_pick is not None and selected_patient != last_pick and selected_patient != "-- Select Patient --":
+            st.session_state["active_patient_id"] = selected_patient
+            st.session_state.pop("patient_data", None)
+        st.session_state["_sidebar_pick"] = selected_patient
+
+
+def _open_patient(pid):
+    st.session_state["active_patient_id"] = pid
+    st.session_state.pop("patient_data", None)
+    st.session_state["nav_page"] = "Dashboard"
+
+
+if nav_page == "Settings":
+    st.markdown('<div class="section-title">Settings</div>', unsafe_allow_html=True)
+    st.caption("Read-only. Values come from environment variables (.env); change them there and restart the app.")
+    flag_names = ["ENABLE_HARDENED_CONFIG", "ENABLE_EXTERNAL_PROMPTS", "ENABLE_PROMPT_INJECTION_SANDBOX",
+                  "ENABLE_ENCRYPTED_CACHE", "ENABLE_CHAT_OUTPUT_SANITIZER", "ENABLE_ANONYMIZED_AUDIT_LOGS",
+                  "ENABLE_STRICT_HTML_SANITIZATION"]
+    rows = "".join(
+        f'<div class="field-row"><span class="field-name">{name}</span>'
+        f'<span class="status-badge {"status-ok" if core.config.flag(name) else "status-info"}">'
+        f'{"On" if core.config.flag(name) else "Off"}</span></div>' for name in flag_names)
+    st.markdown(f'<div class="metric-card"><div class="metric-label">Feature flags</div>{rows}</div>', unsafe_allow_html=True)
+    st.write("")
+    st.markdown(
+        '<div class="metric-card"><div class="metric-label">AI models &amp; services</div>'
+        f'<div class="field-row"><span class="field-name">Chat model</span><span class="field-val">{html.escape(core.config.CHAT_MODEL)}</span></div>'
+        f'<div class="field-row"><span class="field-name">Review models</span><span class="field-val">{html.escape(", ".join(core.config.DEFAULT_MODELS))}</span></div>'
+        f'<div class="field-row"><span class="field-name">Graph (Neo4j)</span><span class="status-badge {"status-ok" if is_neo4j_configured() else "status-info"}">'
+        f'{"Connected" if is_neo4j_configured() else "Not configured"}</span></div></div>',
+        unsafe_allow_html=True,
+    )
+    st.stop()
+
+if nav_page == "Patient Selector":
+    st.markdown('<div class="section-title">Patient Selector</div>', unsafe_allow_html=True)
+    query = st.text_input("Search patients", placeholder="Search by patient ID...", label_visibility="collapsed").strip().lower()
+    shown = [pid for pid in patient_ids if query in pid.lower()]
+    st.caption(f"{len(shown)} of {len(patient_ids)} patients · select a row, then open it")
+    picked = st.dataframe(pd.DataFrame({"Patient ID": shown}), use_container_width=True, hide_index=True,
+                          on_select="rerun", selection_mode="single-row", key="patient_table")
+    rows_sel = picked.selection.rows if picked and picked.selection else []
+    if rows_sel:
+        pid = shown[rows_sel[0]]
+        st.button(f"Open {pid[:8]}… in Dashboard", type="primary", on_click=_open_patient, args=(pid,))
+    st.stop()
 
 
 # ── Search & Patient Bar ─────────────────────────────────────────────────────
@@ -570,7 +205,8 @@ with top_c2:
 if (btn_fetch or patient_id_input) and patient_id_input:
     if (btn_fetch
             or st.session_state.get("active_patient_id") != patient_id_input
-            or "patient_data" not in st.session_state):
+            or "patient_data" not in st.session_state
+            or st.session_state.get("patient_data_version") != DATA_VERSION):
         with st.spinner("Retrieving longitudinal patient records..."):
             try:
                 pd_data = _fetch_patient_history_cached(patient_id_input)
@@ -579,6 +215,7 @@ if (btn_fetch or patient_id_input) and patient_id_input:
                     st.session_state.pop("patient_chat_messages", None)
                     st.session_state.pop("patient_chat_patient_id", None)
                 st.session_state["patient_data"] = pd_data
+                st.session_state["patient_data_version"] = DATA_VERSION
                 st.session_state["active_patient_id"] = patient_id_input
                 st.session_state.pop("medication_journey_data", None)
                 st.session_state["medication_journey_patient_id"] = patient_id_input
@@ -679,7 +316,7 @@ with ov1:
     <div class="metric-card">
         <div class="metric-label">Patient ID</div>
         <div class="metric-value" style="font-size:0.95rem; word-break:break-all;">{pid_disp[:14]}...{pid_disp[-6:]}</div>
-        <div class="metric-sub">Verified Clinical Record</div>
+        <div class="metric-sub"><span class="status-badge status-ok">✓ Verified Clinical Record</span></div>
     </div>
     """, unsafe_allow_html=True)
 with ov2:
@@ -723,26 +360,94 @@ with ov6:
     </div>
     """, unsafe_allow_html=True)
 with ov7:
-    fu_sub = f"{fu_missed} missed" if fu_missed else "Completed / Scheduled"
+    fu_sub = (f'<span class="status-badge status-danger">{fu_missed} missed</span>' if fu_missed
+              else '<span class="status-badge status-ok">On track</span>')
     st.markdown(f"""
     <div class="metric-card">
         <div class="metric-label">Follow-up Adherence</div>
         <div class="metric-value" style="font-size:1.05rem;">{fu_adherence_str}</div>
-        <div class="metric-sub">{html.escape(fu_sub)}</div>
+        <div class="metric-sub">{fu_sub}</div>
     </div>
     """, unsafe_allow_html=True)
 
 st.write("")
 
-# ── Primary Navigation Tabs ──────────────────────────────────────────────────
-tab_timeline, tab_meds, tab_labs, tab_ai, tab_chat, tab_discrepancies, tab_sources = st.tabs([
-    "📅 Clinical Timeline",
-    "💊 Medication Journey",
-    "🧪 Lab Results",
-    "🤖 Retrospective AI Analysis",
-    "💬 Patient Chat",
-    "⚠️ Record Discrepancies",
-    "📄 Source Traceability"
+unlinked_docs = patient_data.get("unlinked_documents") or []
+if unlinked_docs:
+    ul_abnormal = sum(1 for d in unlinked_docs for l in d.get("lab_results") or []
+                      if any(k in str(l.get("status", "")).lower() for k in ("abnormal", "high", "low")))
+    ul_matched = sum(1 for d in unlinked_docs if d.get("likely_visit") or d.get("candidate_visits"))
+    st.markdown(f"""
+    <div class="discrepancy-card">
+        <div class="discrepancy-title">📎 {len(unlinked_docs)} document(s) are not linked to a visit in the record</div>
+        {ul_matched} matched to likely/possible visits · {ul_abnormal} abnormal lab result(s).
+        Their findings are shown in the Timeline, Lab Results, Medication Journey, AI Analysis and Source Traceability tabs, and are searchable in the AI Care Assistant.
+    </div>
+    """, unsafe_allow_html=True)
+
+def _lab_table_rows():
+    rows = []
+    for idx, v in enumerate(visits, start=1):
+        v_date = (v.get("visit_date") or "Unspecified")[:10]
+        for lab in v.get("lab_results", []):
+            rows.append({"Date": v_date, "Encounter": f"Visit #{idx}", "Test Name": safe_val(lab.get("test_name")),
+                         "Result": safe_val(lab.get("value")), "Reference Range": safe_val(lab.get("reference")),
+                         "Status": safe_val(lab.get("status"), "Evaluated")})
+    for d in unlinked_docs:
+        match = d.get("likely_visit")
+        for lab in d.get("lab_results", []):
+            rows.append({"Date": match["visit_date"] if match else "Unknown (not linked)",
+                         "Encounter": f"{d.get('document_label')} → {unlinked_link_text(d)}",
+                         "Test Name": safe_val(lab.get("test_name")), "Result": safe_val(lab.get("value")),
+                         "Reference Range": safe_val(lab.get("reference")), "Status": safe_val(lab.get("status"), "Evaluated")})
+    return rows
+
+
+if nav_page == "Reports":
+    st.markdown('<div class="section-title">Reports</div>', unsafe_allow_html=True)
+    st.caption(f"Downloads for patient {patient_data.get('patient_id', '')}")
+    rep_c1, rep_c2 = st.columns(2)
+    with rep_c1:
+        snap = clinical_snapshot.build_snapshot(patient_data) or {}
+        snap_md = "\n".join(
+            [f"# Clinical snapshot · {patient_data.get('patient_id', '')}",
+             f"{snap.get('age_sex') or 'Age/sex not recorded'} · {snap.get('encounters', 0)} encounters ({snap.get('span', '')})",
+             "Active: " + (", ".join(snap.get("active", [])) or "none documented"), "", "## Concerns"]
+            + [f"- [{f['level']}] {f['title']}: {f['evidence']}" for f in snap.get("flags", [])])
+        st.markdown('<div class="metric-card"><div class="metric-label">Clinical snapshot</div>'
+                    '<div class="metric-sub">Concerns and active conditions (Markdown)</div></div>', unsafe_allow_html=True)
+        st.download_button("Download snapshot", snap_md.encode("utf-8"), file_name="clinical_snapshot.md",
+                           mime="text/markdown", use_container_width=True)
+        review_row = get_patient_row(str(patient_data.get("patient_id", ""))) or {}
+        st.markdown('<div class="metric-card"><div class="metric-label">AI narrative review</div>'
+                    f'<div class="metric-sub">{"Last generated " + html.escape(str(review_row.get("generated_at", ""))[:16]) if review_row.get("review_md") else "Not generated yet"}</div></div>',
+                    unsafe_allow_html=True)
+        if review_row.get("review_md"):
+            st.download_button("Download AI review", review_row["review_md"].encode("utf-8"), file_name="ai_review.md",
+                               mime="text/markdown", use_container_width=True)
+    with rep_c2:
+        lab_rows = _lab_table_rows()
+        st.markdown('<div class="metric-card"><div class="metric-label">Lab results</div>'
+                    f'<div class="metric-sub">{len(lab_rows)} result(s), including documents not linked to a visit</div></div>',
+                    unsafe_allow_html=True)
+        st.download_button("Download labs (CSV)", pd.DataFrame(lab_rows).to_csv(index=False).encode("utf-8"),
+                           file_name="lab_results.csv", mime="text/csv", use_container_width=True, disabled=not lab_rows)
+        journey_rows = [{"Date": enc["visit_date"], "Encounter": enc["visit_index"], "Change": ch.get("type"), "Detail": ch.get("text")}
+                        for enc in st.session_state["medication_journey_data"] for ch in enc.get("changes", [])]
+        st.markdown('<div class="metric-card"><div class="metric-label">Medication journey</div>'
+                    f'<div class="metric-sub">{len(journey_rows)} documented change(s)</div></div>', unsafe_allow_html=True)
+        st.download_button("Download medication journey (CSV)", pd.DataFrame(journey_rows).to_csv(index=False).encode("utf-8"),
+                           file_name="medication_journey.csv", mime="text/csv", use_container_width=True, disabled=not journey_rows)
+    st.stop()
+
+# ── Primary Navigation Tabs (capsule style via ui/styles.css) ────────────────
+tab_timeline, tab_meds, tab_labs, tab_ai, tab_discrepancies, tab_sources = st.tabs([
+    "Timeline",
+    "Medication Journey",
+    "Lab Results",
+    "Retrospective AI Analysis",
+    "Record Discrepancies",
+    "Source Traceability",
 ])
 
 
@@ -759,6 +464,15 @@ with tab_timeline:
     for idx, v in enumerate(visits, start=1):
         v_id = str(v.get("visit_id", f"V{idx}"))
         render_clinical_encounter(idx, v, shifts_by_vid.get(v_id, []))
+        likely_here = [d for d in unlinked_docs if (d.get("likely_visit") or {}).get("visit_index") == idx]
+        if likely_here:
+            render_unlinked_documents(
+                likely_here, heading=f"📎 Likely related document(s) for Encounter #{idx} (not linked in the record)",
+                caption="", expanded=False)
+
+    other_unlinked = [d for d in unlinked_docs if not d.get("likely_visit")]
+    if other_unlinked:
+        render_unlinked_documents(other_unlinked, heading=f"📎 Documents Not Linked to Any Visit ({len(other_unlinked)})")
 
 st.write("")
 
@@ -818,6 +532,16 @@ with tab_meds:
                     st.markdown(f"<div style='margin-left: 1rem; margin-bottom: 0.35rem;'>{badge} <span style='font-size:0.92rem; font-weight:500; margin-left:6px;'>{esc(ch_text)}</span></div>", unsafe_allow_html=True)
             st.write("")
 
+    ul_with_meds = [d for d in unlinked_docs if d.get("medications_found")]
+    if ul_with_meds:
+        st.markdown("##### 📎 Medicines in documents not linked to a visit")
+        for d in ul_with_meds:
+            st.markdown(f"<div style='margin-left: 1rem; margin-bottom: 0.35rem;'><span class='diff-badge-changed'>Unlinked document</span> "
+                        f"<span style='font-size:0.92rem; font-weight:500; margin-left:6px;'>{html.escape(d.get('document_label', ''))} "
+                        f"({html.escape(unlinked_link_text(d))}): {html.escape(', '.join(d['medications_found']))}</span></div>",
+                        unsafe_allow_html=True)
+
+    if med_journey_data and any(enc.get("changes") for enc in med_journey_data):
         possible_side_effects = patient_data.get("possible_side_effects", {})
         if possible_side_effects:
             with st.expander("ℹ️ Medication Side Effect Reference", expanded=False):
@@ -855,18 +579,7 @@ with tab_labs:
     st.markdown('<div class="section-title">Laboratory Investigations & Evaluations</div>', unsafe_allow_html=True)
     st.caption("Quantitative laboratory test reports extracted across clinical encounters.")
 
-    all_labs = []
-    for idx, v in enumerate(visits, start=1):
-        v_date = (v.get("visit_date") or "Unspecified")[:10]
-        for lab in v.get("lab_results", []):
-            all_labs.append({
-                "Date": v_date,
-                "Encounter": f"Visit #{idx}",
-                "Test Name": safe_val(lab.get("test_name")),
-                "Result": safe_val(lab.get("value")),
-                "Reference Range": safe_val(lab.get("reference")),
-                "Status": safe_val(lab.get("status"), "Evaluated")
-            })
+    all_labs = _lab_table_rows()
 
     if not all_labs:
         st.info("No laboratory investigations documented for this patient.")
@@ -877,10 +590,10 @@ with tab_labs:
         def highlight_status(val):
             s = str(val).lower()
             if "abnormal" in s or "high" in s or "low" in s:
-                return "color: #DC2626; font-weight: 600;"
+                return "background-color: #fdecec; color: #a61b1b; font-weight: 700;"
             elif "normal" in s:
-                return "color: #16A34A; font-weight: 500;"
-            return "color: #475569;"
+                return "background-color: #e6f6ec; color: #1b873f; font-weight: 600;"
+            return "color: #5b6474;"
 
         styled_labs = df_labs.style.map(highlight_status, subset=["Status"])
         st.dataframe(styled_labs, use_container_width=True, hide_index=True)
@@ -889,9 +602,22 @@ with tab_labs:
 # ═════════════════════════════════════════════════════════════════════════════
 # TAB 5: AI RETROSPECTIVE ANALYSIS
 # ═════════════════════════════════════════════════════════════════════════════
-with tab_ai:
-    st.markdown('<div class="section-title">AI Clinical Review</div>', unsafe_allow_html=True)
+# Fragment: Generate/Force Refresh and the toggles rerun this tab only, not the whole page.
+@st.fragment
+def _render_ai_tab():
+    st.markdown('<div class="section-title">Clinical Snapshot</div>', unsafe_allow_html=True)
+    try:
+        render_clinical_snapshot(clinical_snapshot.build_snapshot(patient_data))
+    except Exception as e:
+        st.warning(f"Clinical snapshot unavailable: {e}")
 
+    st.markdown('<div class="section-title">Clinical Course</div>', unsafe_allow_html=True)
+    try:
+        render_clinical_course(clinical_snapshot.build_clinical_course(patient_data))
+    except Exception as e:
+        st.warning(f"Clinical course unavailable: {e}")
+
+    st.markdown('<div class="section-title">AI Narrative Review</div>', unsafe_allow_html=True)
     # Status Bar & Controls
     ai_c1, ai_c2 = st.columns([3, 1])
     cache_current = is_review_current(patient_data)
@@ -929,89 +655,18 @@ with tab_ai:
             else:
                 st.caption(f"Fresh full review • {visit_label}")
             if raw_ai_text:
-                render_doctor_friendly_ai_review(raw_ai_text)
+                # Toggles, not expanders: the rendered sections contain expanders of their own.
+                if st.toggle("Show detailed AI narrative review", key="show_ai_narrative"):
+                    render_doctor_friendly_ai_review(raw_ai_text)
     except Exception as e:
         st.error(f"Failed to load or generate AI retrospective review: {e}")
+    if unlinked_docs:
+        if st.toggle(f"Show documents not linked to a visit ({len(unlinked_docs)})", key="show_ai_unlinked"):
+            render_unlinked_documents(unlinked_docs, heading="", expanded=False)
 
-# TAB 5: PATIENT CHAT
-with tab_chat:
-    st.markdown('<div class="section-title">Patient Chat</div>', unsafe_allow_html=True)
-    st.caption("Ask questions about this patient's clinical record.")
-    active_id = str(patient_data.get("patient_id", ""))
-    if st.session_state.get("patient_chat_patient_id") != active_id:
-        st.session_state["patient_chat_patient_id"] = active_id
-        st.session_state["patient_chat_messages"] = []
-    chat_messages = st.session_state.setdefault("patient_chat_messages", [])
-    try:
-        faq = get_top_questions(active_id)
-    except Exception:
-        faq = []
-    if faq:
-        st.caption("Frequently asked")
-        for i, q in enumerate(faq):
-            if st.button(q, key=f"faq_{active_id}_{i}", use_container_width=True):
-                st.session_state["faq_pick"] = q
-                st.rerun()
-    st.caption(f"Session LLM tokens: {sum(m.get('meta', {}).get('total_tokens', 0) for m in chat_messages)}")
-    for message in chat_messages:
-        with st.chat_message(message["role"]):
-            if message["role"] == "assistant":
-                meta = message.get("meta")
-                st.caption(_chat_label(meta) if meta is not None else "LLM-generated response")
-            st.markdown(message["content"])
-            if message["role"] == "assistant" and "retrieved_evidence" in message:
-                with st.expander(f"RAG retrieved {len(message['retrieved_evidence'])} item(s)", expanded=False):
-                    if message["retrieved_evidence"]:
-                        for item in message["retrieved_evidence"]:
-                            st.markdown(
-                                f"**{item.get('date', 'Date not recorded')} · {item.get('category', 'Evidence')}**  "
-                                f"\nVisit: {item.get('visit_id', 'Unknown')} · Source: {item.get('source_id', 'Unknown')}"
-                            )
-                            st.write(item.get("content", ""))
-                    else:
-                        st.caption("No relevant evidence was retrieved for this question.")
-    question = st.chat_input("Ask a question...") or st.session_state.pop("faq_pick", None)
-    if question and question.strip():
-        question = question.strip()
-        prior_history = list(chat_messages)
-        chat_messages.append({"role": "user", "content": question})
-        with st.chat_message("user"):
-            st.markdown(question)
-        with st.chat_message("assistant"):
-            with st.spinner("Retrieving patient record evidence..."):
-                try:
-                    chat_meta = {}
-                    answer, retrieved = answer_patient_question(
-                        patient_data, active_id, question, history=prior_history,
-                        api_key=CHAT_API_KEY,
-                        retrieval_index=st.session_state["patient_chat_index"],
-                        source_hash=st.session_state["review_source_hash"],
-                        meta=chat_meta,
-                    )
-                    if retrieved:
-                        try:
-                            record_chat_question(active_id, question)
-                        except Exception:
-                            pass
-                    st.caption(_chat_label(chat_meta))
-                    st.markdown(answer)
-                    with st.expander(f"RAG retrieved {len(retrieved)} item(s)", expanded=True):
-                        if retrieved:
-                            for item in retrieved:
-                                st.markdown(
-                                    f"**{item.get('date', 'Date not recorded')} · {item.get('category', 'Evidence')}**  "
-                                    f"\nVisit: {item.get('visit_id', 'Unknown')} · Source: {item.get('source_id', 'Unknown')}"
-                                )
-                                st.write(item.get("content", ""))
-                        else:
-                            st.caption("No relevant evidence was retrieved for this question.")
-                    chat_messages.append({
-                        "role": "assistant", "content": answer,
-                        "retrieved_evidence": retrieved,
-                        "meta": chat_meta,
-                    })
-                except Exception as exc:
-                    st.error(f"Patient record Q&A failed: {exc}")
+
+with tab_ai:
+    _render_ai_tab()
 
 # TAB 6: DATA QUALITY / DISCREPANCIES
 with tab_discrepancies:
@@ -1122,5 +777,138 @@ with tab_sources:
                     "Quality Status": status_str
                 })
 
-    df_sources = pd.DataFrame(source_records)
+    for d in unlinked_docs:
+        stats = (d.get("clinical_summary") or {}).get("extraction_stats", {})
+        tot_l, garb = stats.get("total_lines", 0), stats.get("garbled_lines", 0)
+        source_records.append({
+            "Visit Date": (d.get("likely_visit") or {}).get("visit_date", "Unknown"),
+            "Encounter": f"Not linked → {unlinked_link_text(d)}",
+            "Document": d.get("document_label", "Unlinked document"),
+            "Document ID": str(d.get("doc_id", "N/A")),
+            "Lines Processed": tot_l,
+            "Readable Lines": tot_l - garb if tot_l else 0,
+            "Extracted Fields": stats.get("extracted_fields", 0),
+            "Quality Status": "Not linked to a visit",
+        })
+
+    # Rows mix "N/A" with counts; strings keep the Arrow conversion clean.
+    df_sources = pd.DataFrame(source_records).astype(str)
     st.dataframe(df_sources, use_container_width=True, hide_index=True)
+
+
+# ── Floating AI Care Assistant (bottom-right) ────────────────────────────────
+def _toggle_assistant():
+    st.session_state["assistant_open"] = not st.session_state.get("assistant_open", False)
+
+
+def _render_chat_message(message, expanded=False):
+    with st.chat_message(message["role"]):
+        if message["role"] == "assistant":
+            meta = message.get("meta")
+            st.caption(_chat_label(meta) if meta is not None else "LLM-generated response")
+        st.markdown(message["content"])
+        if message["role"] == "assistant" and "retrieved_evidence" in message:
+            with st.expander(f"RAG retrieved {len(message['retrieved_evidence'])} item(s)", expanded=expanded):
+                if message["retrieved_evidence"]:
+                    for item in message["retrieved_evidence"]:
+                        st.markdown(
+                            f"**{item.get('date', 'Date not recorded')} · {item.get('category', 'Evidence')}**  "
+                            f"\nVisit: {item.get('visit_id', 'Unknown')} · Source: {item.get('source_id', 'Unknown')}"
+                        )
+                        st.write(item.get("content", ""))
+                else:
+                    st.caption("No relevant evidence was retrieved for this question.")
+
+
+def _toggle_assistant_size():
+    st.session_state["assistant_large"] = not st.session_state.get("assistant_large", False)
+
+
+# Fragment: chatting, switching mode or resizing reruns only the assistant.
+@st.fragment
+def _render_care_assistant():
+    active_id = str(patient_data.get("patient_id", ""))
+    if st.session_state.get("patient_chat_patient_id") != active_id:
+        st.session_state["patient_chat_patient_id"] = active_id
+        st.session_state["patient_chat_messages"] = []
+    chat_messages = st.session_state.setdefault("patient_chat_messages", [])
+
+    if not st.session_state.get("assistant_open", False):
+        with st.container(key="care_launcher"):
+            st.button("💬 AI Care Assistant", on_click=_toggle_assistant, key="open_assistant")
+    else:
+        large = st.session_state.get("assistant_large", False)
+        with st.container(key="care_assistant_large" if large else "care_assistant"):
+            st.markdown('<div class="ca-header"><span>🩺</span><div><div class="ca-title">AI Care Assistant</div>'
+                        '<div class="ca-sub">Answers from this patient\'s record only</div></div></div>', unsafe_allow_html=True)
+            mode_col, size_col, close_col = st.columns([5, 1, 1])
+            with mode_col:
+                mode = st.segmented_control("Mode", ["Summary", "Ask AI"], default="Summary",
+                                            key="assistant_mode", label_visibility="collapsed") or "Summary"
+            with size_col:
+                st.button("⤡" if large else "⤢", on_click=_toggle_assistant_size, key="resize_assistant",
+                          help="Shrink" if large else "Expand to a larger window")
+            with close_col:
+                st.button("✕", on_click=_toggle_assistant, key="close_assistant", help="Close assistant")
+
+            if mode == "Summary":
+                snap = clinical_snapshot.build_snapshot(patient_data) or {}
+                st.markdown(
+                    f'<div class="ca-summary-line"><b>{html.escape(snap.get("age_sex") or "Age/sex not recorded")}</b> · '
+                    f'{snap.get("encounters", 0)} encounters · Active: {html.escape(", ".join(snap.get("active", [])) or "none documented")}</div>'
+                    + "".join(f'<div class="ca-flag ca-flag-{f["level"]}"><b>{html.escape(f["title"])}</b><br>{html.escape(f["evidence"])}</div>'
+                              for f in snap.get("flags", []) if f["level"] in ("high", "medium")),
+                    unsafe_allow_html=True,
+                )
+                st.caption("Rule-based from the record · no AI tokens. Full snapshot in Retrospective AI Analysis.")
+            else:
+                try:
+                    faq = get_top_questions(active_id)
+                except Exception:
+                    faq = []
+                if faq:
+                    st.caption("Frequently asked")
+                    for i, q in enumerate(faq):
+                        if st.button(q, key=f"faq_{active_id}_{i}", use_container_width=True):
+                            st.session_state["faq_pick"] = q
+                            st.rerun(scope="fragment")
+                history = st.container(height=560 if large else 320)
+                with history:
+                    if not chat_messages:
+                        st.caption("Ask about diagnoses, labs, medicines, trends or documents for this patient.")
+                    for message in chat_messages:
+                        _render_chat_message(message)
+                st.caption(f"Session LLM tokens: {sum(m.get('meta', {}).get('total_tokens', 0) for m in chat_messages)}")
+                question = (st.chat_input("Ask a question about this patient's records...", key="assistant_input")
+                            or st.session_state.pop("faq_pick", None))
+                if question and question.strip():
+                    question = question.strip()
+                    prior_history = list(chat_messages)
+                    user_message = {"role": "user", "content": question}
+                    chat_messages.append(user_message)
+                    with history:
+                        _render_chat_message(user_message)
+                        with st.spinner("Retrieving patient record evidence..."):
+                            try:
+                                chat_meta = {}
+                                answer, retrieved = answer_patient_question(
+                                    patient_data, active_id, question, history=prior_history,
+                                    api_key=CHAT_API_KEY,
+                                    retrieval_index=st.session_state["patient_chat_index"],
+                                    source_hash=st.session_state["review_source_hash"],
+                                    meta=chat_meta,
+                                )
+                                if retrieved:
+                                    try:
+                                        record_chat_question(active_id, question)
+                                    except Exception:
+                                        pass
+                                reply = {"role": "assistant", "content": answer,
+                                         "retrieved_evidence": retrieved, "meta": chat_meta}
+                                chat_messages.append(reply)
+                                _render_chat_message(reply, expanded=False)
+                            except Exception as exc:
+                                st.error(f"Patient record Q&A failed: {exc}")
+
+
+_render_care_assistant()

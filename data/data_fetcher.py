@@ -101,8 +101,7 @@ def _list_database_images():
             ON p.id = pd.patient_id
         WHERE pd.storage_key IS NOT NULL
           AND pd.storage_key ~* '\.(jpg|jpeg|png|webp|gif)$'
-          AND pd.visit_id IS NOT NULL
-        ORDER BY pd.storage_key
+         ORDER BY pd.storage_key
     """)
 
     with ENGINE.connect() as conn:

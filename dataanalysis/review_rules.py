@@ -1,6 +1,7 @@
 """Shared clinical review sanitization, validation, and deterministic fallbacks."""
 import json
 import re
+from collections import Counter
 from pathlib import Path
 
 from review_facts import build_review_facts
@@ -125,11 +126,13 @@ def validate_model_review(markdown):
 
 def deterministic_review(patient_data):
     facts = patient_data.get("_review_facts") or build_review_facts(patient_data)
-    diagnoses = sorted({
+    # Most frequent first, so a long record leads with its chronic conditions.
+    counts = Counter(
         str(value).strip() for fact in facts
         for value in (fact.get("provisional_diagnosis"), fact.get("confirmed_diagnosis"))
         if value
-    })
+    )
+    diagnoses = [name for name, _ in counts.most_common()]
     visits = patient_data.get("visits", []) or []
     if diagnoses:
         overall = f"The record documents {', '.join(diagnoses[:3])} across {len(visits)} encounter(s). The available facts support record review but do not establish additional conclusions."

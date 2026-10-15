@@ -75,9 +75,30 @@ def build_review_facts(patient_data):
     return facts
 
 
+def unlinked_facts(patient_data):
+    """Compact facts for documents without a visit_id (empty list when none)."""
+    facts = []
+    for doc in patient_data.get("unlinked_documents") or []:
+        cs = doc.get("clinical_summary") or {}
+        likely = doc.get("likely_visit") or {}
+        facts.append({
+            "doc_id": str(doc.get("doc_id")),
+            "likely_visit": likely.get("visit_id"),
+            "candidates": sorted(c.get("visit_id") for c in doc.get("candidate_visits") or []),
+            "dx": cs.get("clinical_impression") or cs.get("provisional_diagnosis") or cs.get("confirmed_diagnosis"),
+            "meds": sorted(doc.get("medications_found") or []),
+            "labs": [[l.get("test_name"), l.get("value"), l.get("status")] for l in doc.get("lab_results") or []],
+        })
+    return facts
+
+
 def visit_hashes(patient_data, facts=None):
     facts = facts if facts is not None else build_review_facts(patient_data)
-    return {str(fact["visit_id"]): _canonical_hash(fact) for fact in facts}
+    hashes = {str(fact["visit_id"]): _canonical_hash(fact) for fact in facts}
+    unlinked = unlinked_facts(patient_data)
+    if unlinked:
+        hashes["unlinked_documents"] = _canonical_hash(unlinked)
+    return hashes
 
 
 def compute_source_hash(patient_id, hashes):
@@ -86,3 +107,14 @@ def compute_source_hash(patient_id, hashes):
         "visit_hashes": sorted((str(vid), str(value)) for vid, value in hashes.items()),
     }
     return _canonical_hash(stable)
+
+
+def unlinked_signature(patient_data):
+    """Short hash of documents not linked to a visit; empty when there are none.
+
+    Kept out of the review source hash so existing review caches stay valid.
+    """
+    docs = patient_data.get("unlinked_documents") or []
+    if not docs:
+        return ""
+    return _canonical_hash(unlinked_facts(patient_data))[:12]

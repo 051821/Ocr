@@ -1,0 +1,175 @@
+{
+  "_doc": "Extensible condition registry. Add entries here to support new conditions without code changes.",
+
+  "condition_map": [
+    {"pattern": "\\bt2dm\\b|\\bt2\\s*dm\\b|\\bdm\\b|diabet|\\bniddm\\b", "name": "Type 2 diabetes mellitus"},
+    {"pattern": "\\bhtn\\b|\\bhtb\\b|hypertens", "name": "Hypertension"},
+    {"pattern": "\\bgerd\\b|acidity|reflux|gastritis", "name": "GERD / acidity"},
+    {"pattern": "cervical|\\bneck\\b", "name": "Cervical (neck) pain / spondylosis"},
+    {"pattern": "low(?:er)?\\s*back|lumbar|back\\s*(?:ache|pain)", "name": "Low back pain"},
+    {"pattern": "shoulder|joint|knee|\\bhip\\b", "name": "Joint pain (shoulder / knee / hip)"},
+    {"pattern": "asthma|\\bcopd\\b|bronchial\\s*asthma|chronic\\s*obstruct", "name": "Asthma / COPD"},
+    {"pattern": "thyroid|hypothyr|hyperthyr", "name": "Thyroid disorder"},
+    {"pattern": "epilep|seizur|convuls", "name": "Epilepsy"},
+    {"pattern": "depress|\\bmdd\\b|anxiety|\\bgad\\b", "name": "Depression / anxiety"},
+    {"pattern": "anemi|anaemi", "name": "Anaemia"},
+    {"pattern": "\\bckd\\b|chronic\\s*kidney|renal\\s*(?:failure|insufficiency)", "name": "Chronic kidney disease"},
+    {"pattern": "heart\\s*failure|\\bhf\\b|cardiomyop", "name": "Heart failure"},
+    {"pattern": "\\bcad\\b|coronar|ischem|angina|\\bihd\\b", "name": "Coronary artery disease"},
+    {"pattern": "\\bra\\b|rheumat(?:oid)?\\s*arthr", "name": "Rheumatoid arthritis"},
+    {"pattern": "eczema|\\blsc\\b|dermatit|psoriasis|urticari|folliculit|scabies", "name": "Skin condition"},
+    {"pattern": "migrain|chronic\\s*headache", "name": "Migraine"},
+    {"pattern": "\\bpcos\\b|polycyst", "name": "PCOS"},
+    {"pattern": "liver|hepat|cirr|\\bnafld\\b|\\bnash\\b", "name": "Liver disease"},
+    {"pattern": "\\buti\\b|urinary\\s*tract\\s*infect", "name": "Urinary tract infection"},
+    {"pattern": "pneumonia|\\bcap\\b|\\bhap\\b|lower\\s*resp", "name": "Pneumonia"},
+    {"pattern": "tubercul|\\btb\\b", "name": "Tuberculosis"},
+    {"pattern": "\\bsle\\b|lupus", "name": "SLE (Lupus)"},
+    {"pattern": "osteopor|bone\\s*density", "name": "Osteoporosis"},
+    {"pattern": "gout|hyperuric", "name": "Gout"},
+    {"pattern": "\\bbph\\b|benign\\s*prost|prostat", "name": "BPH / Prostate"},
+    {"pattern": "dyslipid|hyperlipid|hypercholesterol", "name": "Dyslipidaemia"},
+    {"pattern": "dysmenorrh|menstrual\\s*(?:pain|disorder|irregul)", "name": "Dysmenorrhoea"},
+    {"pattern": "herpes\\s*zost|shingles", "name": "Herpes zoster"},
+    {"pattern": "dengue|malaria|typhoid|enteric\\s*fever", "name": "Tropical infection"},
+    {"pattern": "obesity|\\bbmi\\b.*(?:30|obese)", "name": "Obesity"}
+  ],
+
+  "condition_meds": {
+    "Type 2 diabetes mellitus": "metf|glim|glic|insul|sitag|vildag|dapag|empag|teneli|voglib|piogl|linag",
+    "Hypertension": "telmi|amlod|losar|olmes|metop|atenol|ramip|enalap|chlorthal|hydrochl|cilnid|nebiv|bisop",
+    "GERD / acidity": "omez|omep|panto|rabep|esomep|domper|ranit|famot|sucral|antacid",
+    "Asthma / COPD": "salbut|levosalb|budesonid|formot|monteluk|ipratrop|theophyl|flutic|tiotropi",
+    "Thyroid disorder": "levothyr|thyrox|methim|carbim|propylth",
+    "Epilepsy": "leveti|carbamaz|phenyt|valpro|lamotrig|topira|oxcarbaz|clobaz",
+    "Depression / anxiety": "sertral|fluoxet|escitalop|duloxet|venlaf|paroxet|amitript|clonazep|alprazol",
+    "Anaemia": "ferrous|iron|folic|cyanocobal|erythropoi|darbepoe",
+    "Chronic kidney disease": "epoet|darbepoe|calcitr|sevelam|lanthanum",
+    "Heart failure": "carvedil|bisop|metop|enalap|ramip|losart|spironol|furosem|torsem",
+    "Coronary artery disease": "aspirin|ecosprin|clopid|ticagrel|atorvas|rosuvas|nitrog|isosorbid",
+    "Rheumatoid arthritis": "methotrex|hydroxychlor|sulfasalaz|leflunomid",
+    "Skin condition": "betameth|clobetasol|hydrocorti|flucinol|fusid|mupirocin|ketocon|clotrimaz",
+    "Migraine": "sumatript|rizatript|proprano|topira|flunariz",
+    "PCOS": "letrozol|clomiphen|drospirenon",
+    "Liver disease": "ursodeox|lactulose|rifaxim",
+    "Gout": "allopurin|febuxos|colchic",
+    "BPH / Prostate": "tamsulosin|alfuzos|dutaster|finaster",
+    "Dyslipidaemia": "atorvas|rosuvas|fenofi|ezetim",
+    "Tuberculosis": "isoniaz|rifamp|pyrazin|ethamb",
+    "Osteoporosis": "alendr|risedro|zoledr|calcitr|calcium|denosumab",
+    "Obesity": "orlistat|liraglut|semaglut"
+  },
+
+  "condition_labs": {
+    "Type 2 diabetes mellitus": "hba1c|glyco|glucose|sugar|fructos",
+    "Hypertension": "urea|creatinine|sodium|potassium|\\bbun\\b|egfr|cholesterol|lipid|triglycer",
+    "Thyroid disorder": "\\btsh\\b|\\bt3\\b|\\bt4\\b|thyro|\\bft3\\b|\\bft4\\b",
+    "Anaemia": "h(?:a)?emoglobin|\\bhb\\b|ferrit|iron|tibc|\\brbc|pcv|mcv|mch\\b",
+    "Chronic kidney disease": "creatinine|egfr|\\bbun\\b|urea|cystatin|albumin|phosph",
+    "Liver disease": "bilirubin|\\balt\\b|\\bast\\b|sgot|sgpt|alkaline|ggt|albumin|\\binr\\b",
+    "Coronary artery disease": "cholesterol|triglycer|\\bldl\\b|\\bhdl\\b|troponin|bnp|creatine.?kinase",
+    "Heart failure": "bnp|nt.?probnp|troponin|creatinine|sodium|potassium",
+    "PCOS": "\\blh\\b|\\bfsh\\b|testosterone|dheas|insulin|glucose|\\bamh\\b",
+    "Epilepsy": "valpro|carbamaz|phenyt|drug\\s*level",
+    "Dyslipidaemia": "cholesterol|triglycer|\\bldl\\b|\\bhdl\\b|vldl|lipid",
+    "Gout": "uric\\s*acid|urate",
+    "Tuberculosis": "esr|\\bcbc\\b|sputum|mantoux|quantiferon"
+  },
+
+  "pain_meds": "diclo|nucox|etor|etosh|acecl|ibup|parac|nervi|nervup|calsh|calc|cal\\+|shell|thiocol|pregab|duloxe",
+
+  "pain_conditions": [
+    "Cervical (neck) pain / spondylosis",
+    "Low back pain",
+    "Joint pain (shoulder / knee / hip)",
+    "Rheumatoid arthritis",
+    "Gout",
+    "Osteoporosis"
+  ],
+
+  "nsaid_pattern": "diclo|nucox|etor|etosh|acecl|ibup|naprox|indometh|pirox|mefen",
+
+  "nsaid_risk_conditions": [
+    "Hypertension",
+    "Type 2 diabetes mellitus",
+    "Chronic kidney disease",
+    "Heart failure",
+    "Coronary artery disease",
+    "Gout"
+  ],
+
+  "bp_lower_target_conditions": [
+    "Type 2 diabetes mellitus",
+    "Chronic kidney disease",
+    "Coronary artery disease",
+    "Heart failure"
+  ],
+
+  "cardiometabolic_conditions": [
+    "Type 2 diabetes mellitus",
+    "Hypertension",
+    "Dyslipidaemia",
+    "Coronary artery disease",
+    "Obesity",
+    "PCOS"
+  ],
+
+  "control_labs": {
+    "Type 2 diabetes mellitus": {"pattern": "hba1c|glyco|glucose|sugar", "direction": "high", "label": "HbA1c / glucose", "level": "high"},
+    "Thyroid disorder": {"pattern": "\\btsh\\b|\\bt3\\b|\\bt4\\b|\\bft3\\b|\\bft4\\b", "direction": "any", "label": "thyroid function", "level": "medium"},
+    "Anaemia": {"pattern": "^(?!.*glyc).*(?:h(?:a)?emoglobin|\\bhb\\b)", "direction": "low", "label": "haemoglobin", "level": "medium"},
+    "Gout": {"pattern": "uric", "direction": "high", "label": "uric acid", "level": "medium"},
+    "Dyslipidaemia": {"pattern": "triglycer|\\bldl|vldl|cholest", "direction": "high", "label": "lipid profile", "level": "medium"},
+    "Chronic kidney disease": {"pattern": "creatinine|egfr", "direction": "any", "label": "creatinine / eGFR", "level": "high"},
+    "Liver disease": {"pattern": "bilirubin|sgot|sgpt|\\bast\\b|\\balt\\b", "direction": "high", "label": "liver function", "level": "medium"}
+  },
+
+  "condition_symptoms": {
+    "Type 2 diabetes mellitus": [
+      {"pattern": "vision|eye", "title": "Visual symptoms with diabetes", "level": "high", "significance": "Visual change in diabetes can reflect hyperglycaemia or retinopathy."},
+      {"pattern": "dry(?:ness)?\\s*(?:in\\s*)?mouth|thirst|weakness|fatigue|urination", "title": "Symptoms consistent with hyperglycaemia", "level": "medium", "significance": "Recurring alongside out-of-range glycaemic results.", "requires_abnormal_control": true},
+      {"pattern": "numb|tingl|burning\\s*(?:feet|foot|sole)", "title": "Possible neuropathic symptoms with diabetes", "level": "medium", "significance": "Sensory symptoms in diabetes can reflect peripheral neuropathy."}
+    ],
+    "Hypertension": [
+      {"pattern": "headache|giddiness|dizz|palpitat|chest\\s*pain", "title": "Symptoms that can accompany raised BP", "level": "medium", "significance": ""}
+    ],
+    "Asthma / COPD": [
+      {"pattern": "breathless|wheez|cough|short(?:ness)?\\s*of\\s*breath|dyspn", "title": "Recurring respiratory symptoms", "level": "medium", "significance": "Persistent symptoms may reflect incomplete control."}
+    ],
+    "Thyroid disorder": [
+      {"pattern": "palpitat|weight|tired|fatigue|hair\\s*fall|intoleran", "title": "Symptoms that can relate to thyroid status", "level": "medium", "significance": ""}
+    ],
+    "Anaemia": [
+      {"pattern": "weakness|fatigue|giddiness|dizz|breathless|pallor", "title": "Symptoms consistent with anaemia", "level": "medium", "significance": ""}
+    ],
+    "Heart failure": [
+      {"pattern": "breathless|swell|orthopn|dyspn", "title": "Symptoms that can reflect fluid status", "level": "high", "significance": "Breathlessness or swelling in heart failure needs review."}
+    ],
+    "Epilepsy": [
+      {"pattern": "seizur|fit|convuls|faint|black\\s*out", "title": "Seizure-type events recorded", "level": "high", "significance": "Recurrent events may indicate incomplete control."}
+    ]
+  },
+
+  "symptom_med_links": [
+    {"title": "Leg / ankle swelling", "symptom": "swell", "site": "leg|ankle|foot|feet", "only_if_med": false,
+     "meds": [
+       {"pattern": "amlod|nifed|felod|cilnid", "note": "Calcium-channel blockers are a known cause of ankle swelling."},
+       {"pattern": "piogl", "note": "Pioglitazone can cause fluid retention."}
+     ]},
+    {"title": "Cough while on an ACE inhibitor", "symptom": "cough", "site": "", "only_if_med": true,
+     "meds": [{"pattern": "ramip|enalap|lisinop|perindop", "note": "ACE inhibitors are a known cause of dry cough."}]},
+    {"title": "Muscle pain while on a statin", "symptom": "muscle|myalg|body\\s*ache", "site": "", "only_if_med": true,
+     "meds": [{"pattern": "atorvas|rosuvas|simvas", "note": "Statins can cause muscle symptoms."}]}
+  ],
+
+  "renal_caution_meds": "metf|lithi|spironol|digox|gabapent|pregab",
+
+  "kidney_risk_conditions": [
+    "Hypertension",
+    "Type 2 diabetes mellitus",
+    "Chronic kidney disease",
+    "Heart failure"
+  ],
+
+  "impression_keywords": "eczema|lsc|tinea[\\w\\s]*|dermatitis|psoriasis|urticaria|folliculitis|scabies|dysmenorrhea|herpes\\s+zoster|gastroenteritis|t2dm|htn|diabetes|asthma|copd|epilepsy|migraine|thyroid|anemia|anaemia|arthritis|lupus|pcos|cirrhosis|hepatitis|depression|anxiety|bronchitis|pneumonia|tuberculosis|malaria|dengue|typhoid|uti|urti|pharyngitis|tonsillitis|sinusitis|cellulitis|abscess|gout|gerd|reflux|dyslipid|obesity|osteopor|bph|prostat|hypothyr|hyperthyr|seizure|vertigo|neuropath"
+}

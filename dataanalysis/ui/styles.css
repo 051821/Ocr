@@ -1,1 +1,196 @@
-/* Shared style extension point. The existing dashboard theme remains in app.py. */
+/* Clinical dashboard theme: light, high-contrast.
+   Palette: page #f8fafd · sidebar #0f3380 · blue #104eb2 · teal #029c89 · amber #ff9800 */
+
+:root {
+    --cd-bg: #f8fafd;
+    --cd-card: #ffffff;
+    --cd-border: #dfe6f2;
+    --cd-text: #1f2937;
+    --cd-muted: #5b6474;
+    --cd-blue: #104eb2;
+    --cd-blue-soft: #e8effb;
+    --cd-teal: #029c89;
+    --cd-teal-soft: #e0f5f2;
+    --cd-amber: #ff9800;
+    --cd-amber-soft: #fff4e2;
+    --cd-amber-text: #a35a00;
+    --cd-red: #d32f2f;
+    --cd-red-soft: #fdecec;
+    --cd-green: #1b873f;
+    --cd-green-soft: #e6f6ec;
+    --cd-shadow: 0 2px 10px rgba(16, 78, 178, 0.07);
+}
+
+/* ── Page & layout ─────────────────────────────────────────────────────── */
+[data-testid="stApp"], .stApp { background: var(--cd-bg); color: var(--cd-text); }
+[data-testid="stMainBlockContainer"], .main .block-container {
+    padding-top: 1.4rem; padding-bottom: 6rem; max-width: 1400px;
+}
+[data-testid="stHeader"] { background: transparent; }
+
+/* ── Sidebar ───────────────────────────────────────────────────────────── */
+[data-testid="stSidebar"] { background: #0f3380; }
+[data-testid="stSidebar"] * { color: #e8eefb; }
+[data-testid="stSidebar"] [data-baseweb="select"] * { color: var(--cd-text); }
+[data-testid="stSidebar"] [data-baseweb="select"] > div { background: #ffffff; border-radius: 8px; }
+.sb-brand { display: flex; align-items: center; gap: 10px; margin: 0.2rem 0 1.2rem; }
+.sb-logo { width: 34px; height: 34px; border-radius: 9px; background: var(--cd-teal); display: flex;
+           align-items: center; justify-content: center; font-size: 1.1rem; }
+.sb-title { font-size: 1.02rem; font-weight: 700; line-height: 1.2; color: #ffffff !important; }
+.sb-sub { font-size: 0.72rem; opacity: 0.75; }
+.sb-section { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+              opacity: 0.7; margin: 1rem 0 0.4rem; }
+/* Navigation radio rendered as a menu */
+[data-testid="stSidebar"] [role="radiogroup"] { gap: 2px; }
+[data-testid="stSidebar"] [role="radiogroup"] label {
+    width: 100%; padding: 8px 12px; border-radius: 8px; margin: 0; cursor: pointer;
+}
+[data-testid="stSidebar"] [role="radiogroup"] label > div:first-child { display: none; }
+[data-testid="stSidebar"] [role="radiogroup"] label:hover { background: rgba(255, 255, 255, 0.08); }
+[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {
+    background: rgba(255, 255, 255, 0.16); box-shadow: inset 3px 0 0 var(--cd-teal);
+}
+[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) p { font-weight: 700; }
+
+/* ── Typography ────────────────────────────────────────────────────────── */
+.app-brand { font-size: 1.7rem; font-weight: 750; color: #0f2a5f; letter-spacing: -0.02em; margin-bottom: 0.1rem; }
+.app-subtitle { font-size: 0.92rem; color: var(--cd-muted); margin-bottom: 0.8rem; }
+.section-title { font-size: 1.12rem; font-weight: 700; color: #0f2a5f; margin: 1rem 0 0.6rem; }
+.section-subhead { font-size: 0.76rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+                   color: var(--cd-blue); margin: 0.7rem 0 0.35rem; display: block; }
+
+/* ── Notices ───────────────────────────────────────────────────────────── */
+.clinical-notice { background: var(--cd-blue-soft); border-left: 4px solid var(--cd-blue); border-radius: 8px;
+                   padding: 9px 14px; font-size: 0.82rem; color: #1e3a6e; margin-bottom: 1rem; line-height: 1.45; }
+.discrepancy-card { background: var(--cd-amber-soft); border: 1px solid #ffd699; border-left: 4px solid var(--cd-amber);
+                    border-radius: 8px; padding: 10px 14px; margin-bottom: 0.7rem; font-size: 0.86rem;
+                    color: #6b3d00; line-height: 1.45; }
+.discrepancy-title { font-weight: 700; color: var(--cd-amber-text); margin-bottom: 3px; display: flex; gap: 6px; }
+
+/* ── Metric cards ──────────────────────────────────────────────────────── */
+.metric-card { background: var(--cd-card); border: 1px solid var(--cd-border); border-radius: 12px;
+               padding: 12px 14px; box-shadow: var(--cd-shadow); height: 100%; }
+.metric-label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+                color: var(--cd-muted); margin-bottom: 4px; }
+.metric-value { font-size: 1.18rem; font-weight: 700; color: #0f172a; line-height: 1.25; }
+.metric-sub { font-size: 0.75rem; color: var(--cd-muted); margin-top: 5px; }
+
+/* Status badges */
+.status-badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 0.72rem; font-weight: 700; }
+.status-ok { background: var(--cd-green-soft); color: var(--cd-green); border: 1px solid #b7e3c6; }
+.status-warn { background: var(--cd-amber-soft); color: var(--cd-amber-text); border: 1px solid #ffd699; }
+.status-danger { background: var(--cd-red-soft); color: var(--cd-red); border: 1px solid #f5c2c2; }
+.status-info { background: var(--cd-blue-soft); color: var(--cd-blue); border: 1px solid #c9d8f3; }
+
+/* ── Capsule tabs ──────────────────────────────────────────────────────── */
+.stTabs [data-baseweb="tab-list"] { gap: 8px; flex-wrap: wrap; border-bottom: none; padding-bottom: 6px; }
+.stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] { display: none; }
+.stTabs [data-baseweb="tab"] {
+    height: auto; padding: 7px 18px; border-radius: 999px; background: #ffffff;
+    border: 1.5px solid #c9d6ee; color: var(--cd-blue); box-shadow: 0 1px 2px rgba(16, 78, 178, 0.05);
+}
+.stTabs [data-baseweb="tab"] p { font-size: 0.88rem; font-weight: 600; color: var(--cd-blue); }
+.stTabs [data-baseweb="tab"]:hover { border-color: var(--cd-blue); }
+.stTabs [data-baseweb="tab"][aria-selected="true"] { background: var(--cd-blue); border-color: var(--cd-blue); }
+.stTabs [data-baseweb="tab"][aria-selected="true"] p { color: #ffffff; }
+
+/* ── Expanders (encounter cards) ───────────────────────────────────────── */
+div[data-testid="stExpander"] details { background: var(--cd-card); border: 1px solid var(--cd-border) !important;
+                                         border-radius: 10px !important; box-shadow: var(--cd-shadow); }
+div[data-testid="stExpander"] summary { background: var(--cd-blue-soft); border-radius: 10px; color: #0f2a5f; }
+div[data-testid="stExpander"] summary p { font-weight: 650; color: #0f2a5f; }
+div[data-testid="stExpander"] { margin-bottom: 0.6rem; }
+
+/* ── Fields ────────────────────────────────────────────────────────────── */
+.field-row { margin-bottom: 0.45rem; font-size: 0.92rem; line-height: 1.5; display: flex; flex-wrap: wrap; gap: 6px; }
+.field-name { font-weight: 650; color: var(--cd-blue); min-width: 140px; }
+.field-val { color: var(--cd-text); font-weight: 500; }
+.field-na { color: #8a93a3; font-style: italic; }
+
+/* ── Timeline ──────────────────────────────────────────────────────────── */
+.timeline-card { border-left: 3px solid var(--cd-blue); background: #f3f6fc; border-radius: 0 8px 8px 0;
+                 padding: 8px 14px; margin: 0 0 1rem 6px; }
+.timeline-date { font-size: 0.95rem; font-weight: 700; color: var(--cd-blue); margin-bottom: 6px; }
+.encounter-subheading { font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+                        color: var(--cd-blue); margin-bottom: 6px; display: flex; align-items: center; gap: 4px; }
+.doc-clean-card { background: #f5f8fd; border: 1px solid var(--cd-border); border-radius: 8px; padding: 9px 12px; margin-bottom: 6px; }
+.doc-label-badge { font-weight: 700; font-size: 0.83rem; color: var(--cd-blue); }
+.doc-id-badge { font-size: 0.72rem; color: var(--cd-muted); font-family: monospace; }
+.symptom-chip { display: inline-block; background: var(--cd-blue-soft); color: var(--cd-blue); border: 1px solid #c9d8f3;
+                border-radius: 999px; padding: 1px 8px; font-size: 0.74rem; margin: 0 4px 3px 0; }
+.lab-abnormal-card { background: var(--cd-red-soft); border: 1px solid #f5c2c2; border-left: 4px solid var(--cd-red);
+                     border-radius: 6px; padding: 5px 10px; margin-bottom: 4px; font-size: 0.85rem; color: var(--cd-text); }
+.lab-abnormal-card > span:first-child { color: #a61b1b !important; }
+.lab-status-tag { background: #fbd3d3; color: #a61b1b; padding: 1px 6px; border-radius: 999px; font-size: 0.7rem; font-weight: 700; }
+
+/* Medication shift badges */
+.diff-badge-added, .diff-badge-removed, .diff-badge-changed, .diff-badge-stable {
+    padding: 2px 9px; border-radius: 999px; font-size: 0.74rem; font-weight: 700; display: inline-block;
+}
+.diff-badge-added { background: var(--cd-green-soft); color: var(--cd-green); border: 1px solid #b7e3c6; }
+.diff-badge-removed { background: var(--cd-red-soft); color: var(--cd-red); border: 1px solid #f5c2c2; }
+.diff-badge-changed { background: var(--cd-amber-soft); color: var(--cd-amber-text); border: 1px solid #ffd699; }
+.diff-badge-stable { background: var(--cd-blue-soft); color: var(--cd-blue); border: 1px solid #c9d8f3; }
+
+/* Diagnosis and follow-up badges */
+.badge-confirmed, .badge-provisional, .badge-missed, .badge-completed, .badge-pending {
+    padding: 3px 10px; border-radius: 999px; font-size: 0.78rem; font-weight: 700; display: inline-block; margin: 0 4px 4px 0;
+}
+.badge-confirmed, .badge-completed { background: var(--cd-green-soft); color: var(--cd-green); border: 1px solid #b7e3c6; }
+.badge-provisional { background: var(--cd-blue-soft); color: var(--cd-blue); border: 1px solid #c9d8f3; }
+.badge-missed { background: var(--cd-red-soft); color: var(--cd-red); border: 1px solid #f5c2c2; }
+.badge-pending { background: var(--cd-amber-soft); color: var(--cd-amber-text); border: 1px solid #ffd699; }
+.trace-badge { display: inline-block; padding: 2px 8px; font-size: 0.72rem; font-weight: 600; border-radius: 999px;
+               background: #eef1f6; color: var(--cd-muted); border: 1px solid var(--cd-border); }
+
+/* ── AI review ─────────────────────────────────────────────────────────── */
+.ai-narrative-card { background: var(--cd-card); border: 1px solid var(--cd-border); border-radius: 10px; padding: 14px 16px;
+                     font-size: 0.9rem; color: var(--cd-text); line-height: 1.55; margin-bottom: 0.75rem; }
+.ai-hero-card { background: var(--cd-blue-soft); border: 1px solid #c9d8f3; border-left: 5px solid var(--cd-blue);
+                border-radius: 10px; padding: 16px 20px; margin-bottom: 1.2rem; }
+.ai-card-title { font-size: 1.02rem; font-weight: 700; color: var(--cd-blue); display: flex; gap: 8px; margin-bottom: 8px; }
+.ai-hero-text, .ai-insight-text { font-size: 0.93rem; line-height: 1.6; color: var(--cd-text); }
+.ai-section-hdr { font-size: 1rem; font-weight: 700; color: #0f2a5f; margin: 1.1rem 0 0.6rem; display: flex; gap: 6px; }
+.ai-insight-card { background: var(--cd-card); border: 1px solid var(--cd-border); border-left: 4px solid var(--cd-blue);
+                   border-radius: 8px; padding: 11px 15px; margin-bottom: 0.55rem; box-shadow: var(--cd-shadow); }
+.ai-tag { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; display: flex; gap: 5px; }
+.ai-review-box { background: var(--cd-amber-soft); border: 1px solid #ffd699; border-left: 4px solid var(--cd-amber);
+                 border-radius: 8px; padding: 12px 18px; margin-bottom: 1.2rem; }
+.ai-review-title { font-weight: 700; color: var(--cd-amber-text); font-size: 0.86rem; text-transform: uppercase;
+                   letter-spacing: 0.05em; margin-bottom: 6px; }
+.ai-review-list { margin: 0; padding-left: 1.2rem; font-size: 0.9rem; line-height: 1.5; color: var(--cd-text); }
+.ai-review-list li { margin-bottom: 4px; }
+.ai-consideration-card { background: var(--cd-teal-soft); border: 1px solid #b5e6df; border-left: 4px solid var(--cd-teal);
+                         border-radius: 8px; padding: 10px 14px; margin-bottom: 0.55rem; display: flex; min-height: 68px; }
+.evidence-chip { display: inline-block; background: #eef1f6; color: var(--cd-muted); border: 1px solid var(--cd-border);
+                 border-radius: 999px; padding: 4px 10px; margin: 3px; font-size: 0.78rem; }
+.ai-declaration-footer { font-size: 0.78rem; color: var(--cd-muted); border-top: 1px solid var(--cd-border);
+                         padding-top: 8px; margin-top: 1.2rem; font-style: italic; }
+
+/* ── Floating AI Care Assistant ────────────────────────────────────────── */
+.st-key-care_assistant, .st-key-care_assistant_large {
+    position: fixed; right: 24px; bottom: 20px; width: 400px !important; max-width: calc(100vw - 48px);
+    z-index: 1000; background: #ffffff; border: 1px solid var(--cd-border); border-radius: 16px;
+    box-shadow: 0 12px 36px rgba(15, 51, 128, 0.22); padding: 0 14px 12px; gap: 0.5rem;
+}
+/* Expanded assistant: a large window over the dashboard. */
+.st-key-care_assistant_large { width: min(960px, calc(100vw - 48px)) !important; max-height: 90vh; overflow-y: auto; }
+.st-key-care_assistant button, .st-key-care_assistant_large button { min-height: 2rem; }
+
+/* Keep content fully visible while a rerun is in progress (no grey "rendering" fade). */
+[data-stale="true"], .stale-element, [data-testid="stElementContainer"][data-stale="true"] {
+    opacity: 1 !important; transition: none !important;
+}
+.st-key-care_launcher { position: fixed; right: 24px; bottom: 20px; width: auto !important; z-index: 1000; }
+.st-key-care_launcher button { border-radius: 999px; padding: 10px 18px; background: var(--cd-blue); color: #ffffff;
+                               border: none; box-shadow: 0 8px 24px rgba(15, 51, 128, 0.3); font-weight: 700; }
+.st-key-care_launcher button p { color: #ffffff; }
+.ca-header { margin: 0 -14px; padding: 11px 16px; background: #0f3380; border-radius: 16px 16px 0 0;
+             color: #ffffff; display: flex; align-items: center; gap: 8px; }
+.ca-title { font-weight: 700; font-size: 0.95rem; color: #ffffff; }
+.ca-sub { font-size: 0.72rem; opacity: 0.8; color: #e8eefb; }
+.ca-summary-line { font-size: 0.84rem; color: var(--cd-text); margin-bottom: 6px; line-height: 1.45; }
+.ca-flag { font-size: 0.82rem; padding: 6px 9px; border-radius: 6px; margin-bottom: 5px; line-height: 1.4; color: var(--cd-text); }
+.ca-flag-high { background: var(--cd-red-soft); border-left: 3px solid var(--cd-red); }
+.ca-flag-medium { background: var(--cd-amber-soft); border-left: 3px solid var(--cd-amber); }
+.st-key-care_assistant [data-testid="stChatMessage"], .st-key-care_assistant_large [data-testid="stChatMessage"] { padding: 0.4rem 0.5rem; font-size: 0.86rem; }

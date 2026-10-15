@@ -132,9 +132,34 @@ def _build_graph_payload(patient_data):
             doc_rows.append({"id": f"{patient_id}:{visit_ref}:{doc_ref}", "visit_id": visit_id,
                              "patient_id": patient_id, "label": _clean(doc.get("document_label")) or "Clinical document",
                              "date": row["date"], "summary": summary[:300]})
-    return {"patient_id": patient_id, "source_hash": _clean(patient_data.get("_review_source_hash")),
+    unlinked_rows = []
+    for doc in patient_data.get("unlinked_documents", []) or []:
+        match = doc.get("likely_visit") or {}
+        cs = doc.get("clinical_summary") or {}
+        findings = "; ".join(filter(None, (
+            _clean(cs.get("clinical_impression") or cs.get("provisional_diagnosis") or cs.get("confirmed_diagnosis")),
+            "Medicines: " + ", ".join(doc.get("medications_found") or []) if doc.get("medications_found") else "",
+            "Labs: " + ", ".join(f"{l.get('test_name')} {l.get('value')} {l.get('status', '')}".strip()
+                                 for l in (doc.get("lab_results") or [])[:20]) if doc.get("lab_results") else "",
+        )))
+        unlinked_rows.append({
+            "id": f"{patient_id}:unlinked:{_clean(doc.get('doc_id'))}", "patient_id": patient_id,
+            "label": _clean(doc.get("document_label")) or "Unlinked document", "linked": False,
+            "summary": findings[:800] or "No structured findings extracted",
+            "likely_visit_id": f"{patient_id}:{match['visit_id']}" if match.get("visit_id") else None,
+            "candidate_visit_ids": [f"{patient_id}:{c['visit_id']}" for c in doc.get("candidate_visits") or []],
+            "link": (f"likely Encounter #{match['visit_index']} ({match['visit_date']})" if match else
+                     "possible Encounters " + ", ".join(f"#{c['visit_index']} ({c['visit_date']})" for c in doc["candidate_visits"])
+                     if doc.get("candidate_visits") else "no matching visit found"),
+            "match_reasons": "; ".join((match or (doc.get("candidate_visits") or [{}])[0]).get("reasons", [])),
+        })
+    source_hash = _clean(patient_data.get("_review_source_hash"))
+    if unlinked_rows:
+        from review_facts import unlinked_signature
+        source_hash = f"{source_hash}:ul:{unlinked_signature(patient_data)}"
+    return {"patient_id": patient_id, "source_hash": source_hash,
             "total_visits": len(visits), "visits": visits, "rx": rx_rows, "dx": dx_rows,
-            "labs": lab_rows, "docs": doc_rows}
+            "labs": lab_rows, "docs": doc_rows, "unlinked_docs": unlinked_rows}
 
 
 def _ensure_constraints(session):
@@ -180,6 +205,19 @@ def _replace_patient_tx(tx, payload):
         MERGE (d:Doc {id:row.id}) SET d += row
         MERGE (v)-[:HAS_DOC]->(d)
     """, rows=payload["docs"]).consume()
+    tx.run("""
+        UNWIND $rows AS row
+        MATCH (p:Patient {id:$patient_id})
+        MERGE (d:Doc {id:row.id})
+        SET d.patient_id=row.patient_id, d.label=row.label, d.linked=false,
+            d.summary=row.summary, d.match_reasons=row.match_reasons, d.link=row.link
+        MERGE (p)-[:HAS_UNLINKED_DOC]->(d)
+        FOREACH (cid IN row.candidate_visit_ids |
+            MERGE (cv:Visit {id:cid}) MERGE (d)-[:POSSIBLE_VISIT]->(cv))
+        WITH d, row WHERE row.likely_visit_id IS NOT NULL
+        MATCH (v:Visit {id:row.likely_visit_id})
+        MERGE (d)-[:LIKELY_VISIT]->(v)
+    """, patient_id=patient_id, rows=payload.get("unlinked_docs", [])).consume()
 
 
 def sync_patient_to_graph(patient_data) -> bool:
@@ -234,6 +272,17 @@ def query_patient_graph(patient_id: str, limit: int = 100) -> list:
                     output.append({"category": row.get("relation") or "visit", "content": content,
                                    "source_id": visit.get("id", "Unknown"), "visit_id": visit.get("id", "Unknown"),
                                    "date": visit.get("date", "Date not recorded")})
+            unlinked = session.run("""
+                MATCH (:Patient {id:$patient_id})-[:HAS_UNLINKED_DOC]->(d:Doc)
+                OPTIONAL MATCH (d)-[:LIKELY_VISIT]->(v:Visit)
+                RETURN properties(d) AS doc, v.id AS likely_visit, v.date AS likely_date
+            """, patient_id=str(patient_id))
+            for record in unlinked:
+                doc = record["doc"] or {}
+                link = f"{doc.get('link') or 'no matching visit found'}; matched on {doc.get('match_reasons') or 'nothing'}"
+                output.append({"category": "unlinked document graph", "visit_id": "Not linked to a visit",
+                               "visit_index": 0, "source_id": doc.get("id", "Unknown"), "date": "Date unknown",
+                               "content": f"Unlinked document {doc.get('label')} (not linked to any visit, {link}): {doc.get('summary')}"})
             return output
     except Exception as exc:
         logger.warning("Neo4j query error for patient %s: %s", patient_id, exc)

@@ -30,6 +30,13 @@ def _load_reference(name):
 
 MED_NAME_NORMALIZE = _load_reference("medication_normalize.json")
 MEDICATION_SIDE_EFFECTS_DB = _load_reference("medication_side_effects.json")
+_CONDITION_REGISTRY = _load_reference("condition_registry.json")
+
+# Known names come from the reference files, so adding a medicine there extends detection.
+_KNOWN_MED_NAMES = sorted({name.casefold() for name in list(MEDICATION_SIDE_EFFECTS_DB) + list(MED_NAME_NORMALIZE)
+                           if re.fullmatch(r"[a-z][a-z\-]{2,}", name.casefold())}, key=len, reverse=True)
+_KNOWN_MED_PATTERN = r"(?i)\b(" + "|".join(re.escape(n) for n in _KNOWN_MED_NAMES) + r")\b"
+_IMPRESSION_PATTERN = r"(?i)\b(?:" + _CONDITION_REGISTRY["impression_keywords"] + r")\b"
 
 # ============================================================
 # Text cleaning utilities
@@ -188,6 +195,7 @@ def extract_clinical_summary_from_ocr(text_lines: list, visit_date: str = None) 
     # State machine for medication table parsing
     in_med_table = False
     current_med = {}
+    pending_field = None
 
     def flush_med():
         nonlocal current_med
@@ -212,6 +220,21 @@ def extract_clinical_summary_from_ocr(text_lines: list, visit_date: str = None) 
         if len(cl) < 2:
             continue
 
+        # Value printed on the line after a bare header ("CHIEF COMPLAINT"
+        # then "Joint pain since ...").
+        if pending_field:
+            field, pending_field = pending_field, None
+            if not re.search(r'(?i)^(?:chief\s+complaint|diagnosis|impression|r?\s*medications?|vitals?|'
+                             r'dosage|next\s+follow|advice|investigations?)\b', cl):
+                if field == "chief_complaint" and not chief_complaint:
+                    chief_complaint = cl
+                    stats["extracted_fields"] += 1
+                    continue
+                if field == "impression" and impression is None:
+                    impression = cl.title() if cl.isupper() else cl
+                    stats["extracted_fields"] += 1
+                    continue
+
         # ------ Age / Sex ------
         if age_sex is None:
             m = re.search(r'(?i)(?:age[:/\s]+)?(\d{1,3})\s*/\s*(m(?:ale)?|f(?:emale)?)\b', cl)
@@ -235,11 +258,19 @@ def extract_clinical_summary_from_ocr(text_lines: list, visit_date: str = None) 
             if rest and len(rest) > 3:
                 chief_complaint = rest.strip('*')
                 stats["extracted_fields"] += 1
+            else:
+                pending_field = "chief_complaint"
             continue  # skip the header line itself
 
         # ------ Diagnosis / Impression headers ------
         if re.search(r'(?i)\bdiagnosis\s*/\s*impression\b|\bdiagnosis\s*[:]\s*$|\bimpression\s*[:]\s*$', cl):
             in_med_table = False
+            rest = re.sub(r'(?i)^.*?\b(?:diagnosis\s*/\s*impression|diagnosis|impression)\b\s*[:\-]?\s*', '', cl).strip('* ')
+            if rest and len(rest) > 2 and impression is None:
+                impression = rest
+                stats["extracted_fields"] += 1
+            elif not rest:
+                pending_field = "impression"
             continue
 
         # ------ Provisional Diagnosis from document ------
@@ -285,9 +316,8 @@ def extract_clinical_summary_from_ocr(text_lines: list, visit_date: str = None) 
         # Tier 2: known-condition keyword fallback — still useful as a
         # secondary signal when a diagnosis is mentioned inline without an
         # explicit label, but no longer the ONLY way to detect a diagnosis.
-        if impression is None and re.search(
-            r'(?i)\b(?:eczema|lsc|tinea[\w\s]*|dermatitis|psoriasis|urticaria|folliculitis|scabies|dysmenorrhea|herpes\s+zoster|gastroenteritis|t2dm|htn|diabetes)\b', cl
-        ):
+        if (impression is None and re.search(_IMPRESSION_PATTERN, cl) and not _looks_like_lab_row(cl)
+                and not re.search(r"(?i)\b(?:profile|panel|test|report|screen(?:ing)?)\b", cl)):
             candidate = cl.strip('*').strip()
             if len(candidate) >= 3:
                 impression = candidate.title()
@@ -305,10 +335,7 @@ def extract_clinical_summary_from_ocr(text_lines: list, visit_date: str = None) 
             r'(?i)^(?:tab(?:let)?|cap(?:sule)?|syr(?:up)?|inj(?:ection)?|cream|lotion|oint(?:ment)?|gel|drops?|susp(?:ension)?)\.?\s+(.+)',
             cl
         )
-        known_med_match = re.search(
-            r'(?i)\b(fluconazole|citrizine|cetirizine|miconazole|lobet|vasaline|topisal|augmentin|fucibet|omnacortil|atarax|pantoprazole|omeprazole|amlodipine|telmisartan|metformin|ecosprin|paracetamol|azithromycin|amoxicillin|cefixime|ciprofloxacin|levocetirizine|montelukast|ibuprofen|diclofenac)\b',
-            cl
-        )
+        known_med_match = re.search(_KNOWN_MED_PATTERN, cl)
         # Bare "<Name> <strength unit>" with no dosage-form word at all
         # (e.g. "ZoltrimForte 500mg TDS") — still structural, still works
         # for a medicine never seen before.
@@ -603,15 +630,8 @@ def extract_medications_from_text(text_lines):
                 if len(name) >= 3 and not _MED_STOPWORDS.match(name) and not _is_lab_term(name):
                     meds.add(normalize_med_name(name))
 
-    known_pat = (
-        r"(?i)\b(fluconazole|citrizine|cetirizine|miconazole|lobet|vasaline|"
-        r"topisal|augmentin|fucibet|omnacortil|atarax|pantoprazole|omeprazole|"
-        r"amlodipine|telmisartan|metformin|ecosprin|paracetamol|azithromycin|"
-        r"amoxicillin|cefixime|ciprofloxacin|levocetirizine|montelukast|"
-        r"ibuprofen|diclofenac)\b"
-    )
     for line in lines:
-        for m in re.findall(known_pat, line):
+        for m in re.findall(_KNOWN_MED_PATTERN, line):
             meds.add(normalize_med_name(m.strip()))
 
     return sorted(m for m in meds if m and m.lower() not in {
@@ -790,6 +810,13 @@ def extract_lab_results_from_text(text_lines):
         ref = str(ref).strip(' :|*')
         if not tname or len(tname) < 2 or re.match(r'^(?:age|date|page|wt|ht|sample|method|result|units|bio|investigation|interpretation)', tname, re.I):
             return
+        # Bare numbers and reference-table rows ("Non diabetic adults", "At risk") are not tests.
+        if re.fullmatch(r'[\d\s.,:%-]+', tname) or re.match(
+                r'(?i)^(?:non[\s-]?diabetic|at\s+risk|pre-?diabet|diagnosing|diabetic|reference|desirable|'
+                r'borderline|optimal|near\s+optimal|very\s+high|high\s+risk|good\s+control|poor\s+control)', tname):
+            return
+        if not ref and re.search(r'(?i)hba1c|glycosylated|glycated', tname):
+            ref = "< 5.7 (ADA reference)"
         key = (tname.lower(), val)
         if key in seen_tests:
             return
@@ -1328,10 +1355,36 @@ def fetch_patient_history(patient_id):
                 "followups":            v.get("followups", []),
             })
 
+        # Documents that carry this patient_id but no visit_id. They are
+        # never merged into a visit; a likely visit is only suggested.
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, clean_text FROM document_extraction
+                WHERE patient_id = %s::uuid AND visit_id IS NULL AND clean_text IS NOT NULL
+                ORDER BY id
+                """,
+                (patient_id,),
+            )
+            unlinked_rows = cur.fetchall()
+        unlinked_documents = []
+        for doc_num, (doc_id, clean_text) in enumerate(unlinked_rows, start=1):
+            lines = list(dict.fromkeys(
+                ls.strip() for ls in normalize_medical_text(clean_text).splitlines() if ls.strip()
+            ))
+            if not lines:
+                continue
+            doc = _build_document(f"Unlinked Document {doc_num}", doc_id, lines)
+            doc["likely_visit"], doc["candidate_visits"] = _match_unlinked_document(doc, formatted)
+            all_meds.update(doc["medications_found"])
+            all_doc_meds.update(doc["medications_found"])
+            unlinked_documents.append(doc)
+
         return {
             "patient_id":       str(patient_id),
             "total_visits":     len(formatted),
             "visits":           formatted,
+            "unlinked_documents": unlinked_documents,
             "all_medications":  sorted(all_meds),
             "all_db_medications":       sorted(all_db_meds),
             "all_document_medications": sorted(all_doc_meds),
@@ -1340,6 +1393,156 @@ def fetch_patient_history(patient_id):
 
     finally:
         db_pool.putconn(conn)
+
+
+def _build_document(label, doc_id, doc_lines, visit_date=None):
+    """Deterministic extraction for one document, same shape as visit documents."""
+    clinical_summary = extract_clinical_summary_from_ocr(doc_lines, visit_date=visit_date)
+    doc_meds = extract_medications_from_text(doc_lines)
+    doc_meds.extend(m["name"] for m in clinical_summary.get("medications", []) if m.get("name"))
+    return {
+        "document_label":    label,
+        "doc_id":            doc_id,
+        "extracted_text":    doc_lines,
+        "clinical_summary":  clinical_summary,
+        "medications_found": sorted(set(doc_meds)),
+        "lab_results":       clinical_summary.get("lab_results") or [],
+    }
+
+
+_MATCH_STOPWORDS = {
+    "with", "from", "this", "that", "patient", "documented", "none", "visit", "follow", "complaint",
+    "since", "some", "days", "pain", "other", "noted", "ruled", "under", "evaluation", "general",
+}
+_MONTHS = {m: i for i, m in enumerate(
+    ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"), start=1)}
+# Lab families -> condition words a related visit usually carries.
+_LAB_CONDITION_HINTS = (
+    (r"hba1c|glyco|glucose|sugar", {"dm", "t2dm", "diabetes", "diabetic"}),
+    (r"urea|creatinine|sodium|potassium|bun|egfr|uric", {"htn", "hypertension", "dm", "t2dm", "kidney", "renal"}),
+    (r"cholesterol|triglycer|lipid|hdl|ldl", {"htn", "dm", "t2dm", "dyslipidemia", "lipid"}),
+    (r"hemoglobin|haemoglobin|rbc|wbc|tlc|platelet|pcv", {"weakness", "weeknes", "anemia", "anaemia", "fatigue", "fever"}),
+    (r"tsh|t3|t4|thyroid", {"thyroid", "hypothyroidism", "hyperthyroidism"}),
+)
+
+
+def _words(*values):
+    text = " ".join(str(v or "") for v in values).casefold()
+    return set(re.findall(r"[a-z][a-z0-9]{3,}", text)) - _MATCH_STOPWORDS
+
+
+def _tokens_all(*values):
+    return set(re.findall(r"[a-z0-9]+", " ".join(str(v or "") for v in values).casefold()))
+
+
+def _med_key(name):
+    n = re.sub(r"(?i)\b(?:tab(?:let)?|cap(?:sule)?|syr(?:up)?|inj(?:ection)?|gel|cream|oint(?:ment)?|"
+               r"lotion|drops?|susp(?:ension)?|ip)\b\.?", " ", str(name or ""))
+    n = re.sub(r"(?i)\d+(?:\.\d+)?\s*(?:mg|mcg|ml|gm|g|iu|%)?", " ", n)
+    return " ".join(n.casefold().replace("-", " ").split())
+
+
+def _parse_dates(text):
+    """ISO dates found in free text (d/m/yyyy, yyyy-mm-dd, '09 JUL 2026')."""
+    from datetime import date
+    found = []
+    for d, m, y in re.findall(r"\b(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})\b", text):
+        found.append((int(y), int(m), int(d)))
+    for y, m, d in re.findall(r"\b(\d{4})-(\d{2})-(\d{2})\b", text):
+        found.append((int(y), int(m), int(d)))
+    for d, mon, y in re.findall(r"(?i)\b(\d{1,2})\s*[- ]?\s*([a-z]{3})[a-z]*\s*[- ,]?\s*(\d{4})\b", text):
+        if mon.casefold() in _MONTHS:
+            found.append((int(y), _MONTHS[mon.casefold()], int(d)))
+    out = []
+    for y, m, d in found:
+        try:
+            out.append(date(y, m, d))
+        except ValueError:
+            pass
+    return out
+
+
+def _match_unlinked_document(doc, visits):
+    """Suggest which visit a document without visit_id belongs to.
+
+    Deterministic score per visit: shared medicines (3 each), shared
+    diagnosis/complaint words (2 each), lab family that fits the visit's
+    conditions (2), a lab report vs a visit that mentions reports (2), visit
+    date printed in the document (5), visit shortly before the document's
+    follow-up date (3) or shortly after a report date (2). One clear winner
+    becomes ``likely``; a tie of up to three visits becomes ``candidates``.
+    The record itself is never changed.
+    """
+    from datetime import date
+    cs = doc.get("clinical_summary") or {}
+    doc_meds = {_med_key(m) for m in doc.get("medications_found", [])} - {""}
+    doc_dx = _words(cs.get("clinical_impression"), cs.get("provisional_diagnosis"),
+                    cs.get("confirmed_diagnosis"), cs.get("chief_complaint"))
+    is_lab_report = bool(doc.get("lab_results")) and not doc_meds
+    hint_ids = set()
+    for lab in doc.get("lab_results", []):
+        name = str(lab.get("test_name", "")).casefold()
+        # First family only, so "glycosylated haemoglobin" counts as HbA1c, not CBC.
+        hit = next((i for i, (pattern, _) in enumerate(_LAB_CONDITION_HINTS) if re.search(pattern, name)), None)
+        if hit is not None:
+            hint_ids.add(hit)
+    hints = [_LAB_CONDITION_HINTS[i][1] for i in sorted(hint_ids)]
+    followup_dates = _parse_dates(str(cs.get("follow_up") or ""))
+    doc_dates = set(_parse_dates(" ".join(doc.get("extracted_text", [])))) - set(followup_dates)
+
+    scored = []
+    for idx, v in enumerate(visits, start=1):
+        try:
+            v_date = date.fromisoformat(str(v.get("visit_date") or "")[:10])
+        except ValueError:
+            v_date = None
+        v_meds = {_med_key(m) for m in v.get("medications_found", [])} - {""}
+        shared_meds = {m for m in doc_meds if any(m == vm or (len(m) >= 4 and (m in vm or vm in m)) for vm in v_meds)}
+        v_dx = _words(v.get("confirmed_diagnosis"), v.get("provisional_diagnosis"), v.get("chief_complaint"))
+        v_tokens = _tokens_all(v.get("confirmed_diagnosis"), v.get("provisional_diagnosis"), v.get("chief_complaint"))
+        reasons, score = [], 0
+        if shared_meds:
+            score += 3 * len(shared_meds)
+            reasons.append("same medicines: " + ", ".join(sorted(shared_meds)[:4]))
+        if doc_dx & v_dx:
+            score += 2 * len(doc_dx & v_dx)
+            reasons.append("same diagnosis/complaint words: " + ", ".join(sorted(doc_dx & v_dx)[:3]))
+        fitting = [w for w in hints if w & v_tokens]
+        if fitting:
+            score += 2 * len(fitting)
+            reasons.append("lab tests fit visit conditions (" + ", ".join(sorted(set().union(*fitting) & v_tokens)) + ")")
+        if is_lab_report and "report" in str(v.get("chief_complaint") or "").casefold():
+            score += 2
+            reasons.append("visit mentions reports")
+        if v_date:
+            if v_date in doc_dates:
+                score += 5
+                reasons.append(f"visit date {v_date} printed in document")
+            elif any(0 <= (v_date - d).days <= 7 for d in doc_dates):
+                score += 2
+                reasons.append("visit within 7 days after a date in the document")
+            if any(0 < (d - v_date).days <= 21 for d in followup_dates):
+                score += 3
+                reasons.append("document's next follow-up date comes shortly after this visit")
+        if score:
+            scored.append((score, idx, v, reasons))
+    if not scored:
+        return None, []
+    top = max(s[0] for s in scored)
+    best = [s for s in scored if s[0] == top]
+    if top < 3:
+        return None, []
+
+    def _ref(entry):
+        score, idx, v, reasons = entry
+        return {"visit_id": str(v.get("visit_id")), "visit_index": idx,
+                "visit_date": str(v.get("visit_date") or "")[:10], "score": score, "reasons": reasons}
+
+    if len(best) == 1:
+        return _ref(best[0]), []
+    if len(best) <= 3:
+        return None, [_ref(b) for b in best]
+    return None, []
 
 
 def _parse_vitals_json(vitals_json: dict, visit_date: str) -> list:

@@ -75,8 +75,27 @@ def build_ai_review_context(patient_data):
             "doc_ids": [str(doc.get("doc_id")) for doc in (visit.get("documents") or [])[:8] if doc.get("doc_id") is not None],
         })
     payload = {"patient_id": patient_data.get("patient_id"), "total_visits": len(visits), "visits": visits}
+    unlinked = []
+    for doc in patient_data.get("unlinked_documents") or []:
+        cs = doc.get("clinical_summary") or {}
+        likely = doc.get("likely_visit")
+        unlinked.append({
+            "doc": str(doc.get("doc_id"))[-8:],
+            "visit": (f"likely visit {likely['visit_id']} ({likely['visit_date']})" if likely else
+                      "possible visits " + ", ".join(c["visit_date"] for c in doc.get("candidate_visits") or [])
+                      if doc.get("candidate_visits") else "not linked"),
+            "dx": str(cs.get("provisional_diagnosis") or cs.get("confirmed_diagnosis") or "")[:80],
+            "meds": (doc.get("medications_found") or [])[:6],
+            "abnormal_labs": [[str(l.get("test_name"))[:30], str(l.get("value"))[:12], str(l.get("status"))[:16]]
+                              for l in doc.get("lab_results") or []
+                              if any(f in str(l.get("status") or "").casefold() for f in ("abnormal", "high", "low"))][:6],
+            "normal_lab_count": sum(1 for l in doc.get("lab_results") or [] if str(l.get("status") or "").casefold() == "normal"),
+        })
     while len(json.dumps(payload, ensure_ascii=False, separators=(",", ":"))) > 4000 and len(payload["visits"]) > 1:
         payload["visits"].pop(0)
+    # Added after the visit budget so unlinked documents never push visits out.
+    if unlinked:
+        payload["documents_without_visit"] = unlinked
     return payload
 
 

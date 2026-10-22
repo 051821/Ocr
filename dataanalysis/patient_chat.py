@@ -1688,7 +1688,7 @@ def _answer_patient_question(patient_data, patient_id, question, history=None, a
                       for item in (history or [])[-2:] if item.get("role") in {"user", "assistant"}]
     # Follow-ups ("what are its side effects?") depend on prior turns, both in retrieval and in the prompt.
     history_sig = hashlib.blake2b(json.dumps([recent_history, _retrieval_query(question, history)], ensure_ascii=False).encode(), digest_size=8).hexdigest()
-    cache_key = f"chat:v17:{sanitizer_flag_str}:{_chat_pv}:" + hashlib.blake2b((f"{source_hash or ''}|{vitals_sig}|{history_sig}|{normalized_question}" + (f"|ul:{unlinked_signature(patient_data)}" if patient_data.get("unlinked_documents") else "")).encode(), digest_size=16).hexdigest()
+    cache_key = f"chat:v17:{sanitizer_flag_str}:{_chat_pv}:" + hashlib.blake2b((f"{patient_id}|{source_hash or ''}|{vitals_sig}|{history_sig}|{normalized_question}" + (f"|ul:{unlinked_signature(patient_data)}" if patient_data.get("unlinked_documents") else "")).encode(), digest_size=16).hexdigest()
     cached = get_llm_cache(cache_key)
     if cached:
         meta["path"] = "llm_cache"

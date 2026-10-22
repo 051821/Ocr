@@ -121,8 +121,8 @@ def test_version_changes_on_content_change(tmp_path, monkeypatch):
 # 5. Flag OFF → PROMPT_VERSION stays the old static string
 # ---------------------------------------------------------------------------
 def test_flag_off_keeps_static_prompt_version():
-    """With ENABLE_EXTERNAL_PROMPTS unset, PROMPT_VERSION must equal 'clinical_ai_review_v7'."""
+    """With ENABLE_EXTERNAL_PROMPTS unset, PROMPT_VERSION must equal 'clinical_ai_review_v8'."""
     os.environ.pop("ENABLE_EXTERNAL_PROMPTS", None)
     import review_facts
     importlib.reload(review_facts)
-    assert review_facts.PROMPT_VERSION == "clinical_ai_review_v7"
+    assert review_facts.PROMPT_VERSION == "clinical_ai_review_v8"

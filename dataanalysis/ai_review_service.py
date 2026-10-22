@@ -14,6 +14,10 @@ from storage.ai_analysis_csv import (
 
 logger = logging.getLogger(__name__)
 
+# Model label stored with a template review. Such rows are never treated as
+# current, so the next load retries the LLM instead of locking in the fallback.
+FALLBACK_MODEL = "Deterministic fallback"
+
 
 def _read_review(row):
     return str((row or {}).get("review_md") or "")
@@ -48,6 +52,7 @@ def is_review_current(patient_data):
         row
         and row.get("source_hash") == source_hash
         and row.get("prompt_version") == PROMPT_VERSION
+        and row.get("model") != FALLBACK_MODEL
         and _valid_review(_read_review(row))
     )
 
@@ -61,7 +66,8 @@ def get_or_generate_review(patient_data, force_refresh=False):
     same_source = bool(row and row.get("source_hash") == current_hash)
     current_prompt = bool(row and row.get("prompt_version") == PROMPT_VERSION)
 
-    if same_source and current_prompt and not force_refresh:
+    is_fallback = bool(row and row.get("model") == FALLBACK_MODEL)
+    if same_source and current_prompt and not force_refresh and not is_fallback:
         markdown = _read_review(row)
         if _valid_review(markdown):
             return {
@@ -79,7 +85,7 @@ def get_or_generate_review(patient_data, force_refresh=False):
         if old_hashes.get(str(visit_id)) != value
     }
     should_increment = bool(
-        row and row.get("source_hash") and not force_refresh and current_prompt
+        row and row.get("source_hash") and not force_refresh and current_prompt and not is_fallback
         and changed_ids and set(old_hashes).issubset(current_hashes)
         and mismatch_count + 1 < FULL_RERUN_THRESHOLD
     )
@@ -108,12 +114,13 @@ def get_or_generate_review(patient_data, force_refresh=False):
             markdown = report.get("raw_markdown", "")
     except Exception as exc:
         logger.warning("AI review generation failed; using deterministic record summary: %s", exc)
-        report = {"raw_markdown": "", "model_name": "Deterministic fallback", "model_version": ""}
+        report = {"raw_markdown": "", "model_name": FALLBACK_MODEL, "model_version": ""}
         markdown = ""
     if validate_model_review(markdown):
         markdown = sanitize_review(markdown, patient_data)
     if not _valid_review(markdown):
         markdown = deterministic_review(patient_data)
+        report["model_name"], report["model_version"] = FALLBACK_MODEL, ""
     report["raw_markdown"] = markdown
     saved_row = upsert_ai_analysis(
         patient_data,

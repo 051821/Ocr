@@ -27,7 +27,7 @@ importlib.reload(core.config)
 importlib.reload(core.llm_client)
 import ui_components
 importlib.reload(ui_components)
-from ui_components import esc, render_clinical_course, render_clinical_encounter, render_clinical_snapshot, render_doctor_friendly_ai_review, render_unlinked_documents, unlinked_link_text
+from ui_components import esc, strip_remote_images, render_clinical_course, render_clinical_encounter, render_clinical_snapshot, render_doctor_friendly_ai_review, render_unlinked_documents, unlinked_link_text
 import clinical_snapshot
 importlib.reload(clinical_snapshot)
 try:
@@ -226,6 +226,13 @@ if (btn_fetch or patient_id_input) and patient_id_input:
                 st.session_state.pop("ai_metadata", None)
             except Exception as e:
                 st.error(f"Error retrieving clinical record: {e}")
+                # Never keep showing the previous patient under the newly entered ID.
+                for stale_key in ("patient_data", "patient_data_version",
+                                  "patient_chat_messages", "patient_chat_patient_id", "patient_chat_index",
+                                  "medication_journey_data", "medication_journey_patient_id",
+                                  "review_facts", "review_visit_hashes", "review_source_hash",
+                                  "ai_report", "ai_metadata"):
+                    st.session_state.pop(stale_key, None)
 
 patient_data = st.session_state.get("patient_data")
 
@@ -711,7 +718,7 @@ with tab_sources:
                     for doc in visit.get("documents", []) or []:
                         lines = doc.get("extracted_text") or []
                         summary = doc.get("clinical_summary") or {}
-                        summary = _augment_with_ai_if_gaps(lines, summary)
+                        summary = _augment_with_ai_if_gaps(lines, summary, patient_id=patient_data.get("patient_id"))
                         doc["clinical_summary"] = summary
                         doc["lab_results"] = summary.get("lab_results") or doc.get("lab_results", [])
                         names = set(extract_medications_from_text(lines))
@@ -810,19 +817,19 @@ def _split_evidence(content):
 def _render_chat_message(message, expanded=False):
     with st.chat_message(message["role"]):
         if message["role"] != "assistant":
-            st.markdown(message["content"])
+            st.markdown(strip_remote_images(message["content"]))
             return
         meta = message.get("meta")
         st.caption(_chat_label(meta) if meta is not None else "LLM-generated response")
         body, evidence_md = _split_evidence(message["content"])
-        st.markdown(body)
+        st.markdown(strip_remote_images(body))
         retrieved = message.get("retrieved_evidence")
         if not evidence_md and retrieved is None:
             return
         # Evidence stays collapsed so the answer reads cleanly; open it to check the sources.
         with st.expander("Evidence", expanded=expanded):
             if evidence_md:
-                st.markdown(evidence_md)
+                st.markdown(strip_remote_images(evidence_md))
             if retrieved is not None:
                 st.caption(f"RAG retrieved {len(retrieved)} item(s)")
                 if not retrieved:
@@ -832,7 +839,7 @@ def _render_chat_message(message, expanded=False):
                         f"**{item.get('date', 'Date not recorded')} · {item.get('category', 'Evidence')}**  "
                         f"\nVisit: {item.get('visit_id', 'Unknown')} · Source: {item.get('source_id', 'Unknown')}"
                     )
-                    st.write(item.get("content", ""))
+                    st.markdown(strip_remote_images(item.get("content", "")))
 
 
 def _toggle_assistant_size():

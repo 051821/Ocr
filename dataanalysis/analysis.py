@@ -696,7 +696,8 @@ def _ai_lookup_side_effects(unmatched_meds):
             f"MEDICINE NAMES:\n{med_list_str}"
         )
     try:
-        response = llm_complete([{"role": "user", "content": prompt}], "side_effects", max_tokens=300)
+        response = llm_complete([{"role": "user", "content": prompt}], "side_effects", max_tokens=300,
+                                validate=_parses_as_json_object)
         content = response["content"].strip()
         content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content, flags=re.I).strip()
         json_match = re.search(r"\{.*\}", content, flags=re.S)
@@ -921,7 +922,17 @@ def extract_lab_results_from_text(text_lines):
 # medication — we ask the model to have a look, instead of quietly
 # reporting "not documented".
 
-def _ai_extract_full_clinical_summary(text_lines):
+def _parses_as_json_object(content):
+    """Cache gate for JSON-returning LLM calls: reject fenced-but-broken or truncated JSON."""
+    text = re.sub(r"^```(?:json)?|```$", "", str(content or "").strip(), flags=re.M).strip()
+    match = re.search(r"\{.*\}", text, flags=re.S)
+    try:
+        return isinstance(json.loads(match.group(0) if match else text), dict)
+    except ValueError:
+        return False
+
+
+def _ai_extract_full_clinical_summary(text_lines, patient_id=None):
     """Extract a weak or unresolved OCR document in one cached request."""
     if not text_lines:
         return None
@@ -971,7 +982,8 @@ def _ai_extract_full_clinical_summary(text_lines):
         "lab_results", "follow_up", "clinical_notes",
     })
     try:
-        response = llm_complete(messages, "extraction", max_tokens=MAX_TOKENS.get("extraction", 300))
+        response = llm_complete(messages, "extraction", max_tokens=MAX_TOKENS.get("extraction", 300),
+                                patient_id=patient_id, validate=_parses_as_json_object)
         content = re.sub(r"^```(?:json)?|```$", "", response["content"].strip(), flags=re.M).strip()
         data = json.loads(content)
         if not isinstance(data, dict):
@@ -1013,14 +1025,14 @@ def _has_unresolved_medicine_or_diagnosis(text_lines, clinical_summary):
     return False
 
 
-def _augment_with_ai_if_gaps(doc_lines, clinical_summary):
+def _augment_with_ai_if_gaps(doc_lines, clinical_summary, patient_id=None):
     """One Tier 2 extraction only when deterministic parsing leaves a gap."""
     if not doc_lines or not (
         _extraction_looks_weak(clinical_summary)
         or _has_unresolved_medicine_or_diagnosis(doc_lines, clinical_summary)
     ):
         return clinical_summary
-    extracted = _ai_extract_full_clinical_summary(doc_lines)
+    extracted = _ai_extract_full_clinical_summary(doc_lines, patient_id=patient_id)
     if not extracted:
         return clinical_summary
 

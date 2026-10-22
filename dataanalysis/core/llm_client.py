@@ -33,8 +33,25 @@ def _cache_key(task, messages, models, temperature, max_tokens):
     return "llm:" + hashlib.blake2b(payload.encode("utf-8"), digest_size=16).hexdigest()
 
 
-def complete(messages, task, api_key=None, model=None, temperature=0.1, max_tokens=None, cache=True):
-    """Return a cached or generated response with model and usage metadata."""
+def _passes(validate, content):
+    if validate is None:
+        return True
+    try:
+        return bool(validate(content))
+    except Exception as exc:
+        logger.warning("LLM output validator raised; treating output as invalid: %s", exc)
+        return False
+
+
+def complete(messages, task, api_key=None, model=None, temperature=0.1, max_tokens=None, cache=True,
+             patient_id=None, validate=None):
+    """Return a cached or generated response with model and usage metadata.
+
+    Only complete responses are cached: a truncated reply (finish_reason
+    "length") or one rejected by ``validate(content)`` is returned to the
+    caller but never stored. ``patient_id`` tags the cache row so
+    ``purge_patient`` can remove it.
+    """
     if flag("ENABLE_HARDENED_CONFIG"):
         key = get_openrouter_api_key(api_key)
         active_models = (model,) if model else tuple(m for m in DEFAULT_MODELS if not m.endswith(":free"))
@@ -56,8 +73,10 @@ def complete(messages, task, api_key=None, model=None, temperature=0.1, max_toke
             cached = get_llm_cache(cache_key)
             if cached:
                 result = json.loads(cached)
-                result["cache_hit"] = True
-                return result
+                # Entries written before validation existed may be invalid; regenerate those.
+                if _passes(validate, result.get("content")):
+                    result["cache_hit"] = True
+                    return result
         except Exception as exc:
             logger.warning("LLM cache read failed: %s", exc)
 
@@ -82,15 +101,20 @@ def complete(messages, task, api_key=None, model=None, temperature=0.1, max_toke
                 if not content:
                     raise ValueError("LLM response did not contain message content")
                 usage = body.get("usage") or {}
+                truncated = choices[0].get("finish_reason") == "length"
                 logger.info(
                     "llm task=%s model=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s",
                     task, candidate, usage.get("prompt_tokens"),
                     usage.get("completion_tokens"), usage.get("total_tokens"),
                 )
-                result = {"content": content, "model": candidate, "usage": usage, "cache_hit": False}
-                if cache:
+                result = {"content": content, "model": candidate, "usage": usage,
+                          "cache_hit": False, "truncated": truncated}
+                if truncated:
+                    logger.warning("LLM task=%s model=%s hit max_tokens=%d; not caching", task, candidate, max_tokens)
+                cacheable = not truncated and _passes(validate, content)
+                if cache and cacheable:
                     try:
-                        set_llm_cache(cache_key, json.dumps(result, ensure_ascii=False))
+                        set_llm_cache(cache_key, json.dumps(result, ensure_ascii=False), patient_id=patient_id)
                     except Exception as exc:
                         logger.warning("LLM cache write failed: %s", exc)
                 return result

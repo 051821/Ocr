@@ -15,7 +15,7 @@ if MODULE_DIR not in sys.path:
 from review_facts import PROMPT_VERSION
 from medication_journey import compute_medication_journey
 from core.llm_client import complete as llm_complete
-from review_rules import REQUIRED_ENDING, REVIEW_SECTIONS, sanitize_review as _sanitize
+from review_rules import REQUIRED_ENDING, REVIEW_SECTIONS, sanitize_review as _sanitize, validate_model_review
 from core.config import flag as _flag
 
 SYSTEM_PROMPT = """You are a clinical-record review assistant. Analyze the patient's complete medical journey using only supplied records. Summarize the timeline, documented conditions, investigations, treatments, clinical progress, response, complications, and unresolved issues.
@@ -31,7 +31,7 @@ Use exactly these Markdown headings:
 
 Be concise, chronological where useful, and evidence-based. Include dates, values, units, and source references when available. Keep the review between 250 and 400 words. End with:
 
-**Retrospective review only: based on supplied records, not a real-time assessment or a substitute for clinician judgment.**"""
+""" + REQUIRED_ENDING
 
 # When ENABLE_EXTERNAL_PROMPTS is on, load the system prompt from the prompt
 # file and substitute the canonical REQUIRED_ENDING so both the prompt and the
@@ -133,25 +133,27 @@ def build_incremental_prompt(old_analysis_markdown, patient_data, prev_visit_cou
         f"Update the review only when the supplied changed evidence warrants it. Preserve the required headings and exact ending: {REQUIRED_ENDING}\n\n"
         f"PREVIOUS REVIEW:\n{previous}\n\nCHANGED VISIT FACTS (JSON):\n{current}"
     )
-def _call_openrouter(prompt, retry_feedback=None):
+def _call_openrouter(prompt, retry_feedback=None, patient_id=None):
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": prompt},
     ]
     if retry_feedback:
         messages.append({"role": "user", "content": f"Fix the structure issue: {retry_feedback}"})
-    result = llm_complete(messages, "review", temperature=0.1, max_tokens=600)
+    result = llm_complete(messages, "review", temperature=0.1, max_tokens=600,
+                          patient_id=patient_id, validate=validate_model_review)
     return {"raw_markdown": result["content"], "model_name": result["model"], "model_version": ""}
 
 
 def _sanitize_review(markdown, patient_data=None):
     return _sanitize(markdown, patient_data or {})
 def analyze_patient_with_ai(patient_data, retry_feedback=None):
-    return _call_openrouter(build_ai_review_prompt(patient_data, retry_feedback))
+    return _call_openrouter(build_ai_review_prompt(patient_data, retry_feedback),
+                            patient_id=patient_data.get("patient_id"))
 
 
 def analyze_patient_incremental(old_markdown, patient_data, prev_visit_count=0, previous_context=None, retry_feedback=None):
     prompt = build_incremental_prompt(old_markdown, patient_data, prev_visit_count, previous_context)
     if retry_feedback:
         prompt += f"\n\nCorrection required: {retry_feedback}"
-    return _call_openrouter(prompt)
+    return _call_openrouter(prompt, patient_id=patient_data.get("patient_id"))

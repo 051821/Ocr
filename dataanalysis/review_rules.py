@@ -14,6 +14,20 @@ _REFERENCE = Path(__file__).resolve().parent / "data" / "reference" / "considera
 with _REFERENCE.open(encoding="utf-8") as _stream:
     _CONSIDERATION_RULES = json.load(_stream)
 
+# Headings the model may echo back (title, or the section sanitize_review adds
+# to the previous review an incremental update starts from).
+_MODEL_EXTRA_HEADINGS = {"ai clinical review", "general patient considerations"}
+
+
+def _plain(line):
+    """Line text without surrounding Markdown emphasis."""
+    return line.strip().strip("*_").strip()
+
+
+def _heading_name(line):
+    return _plain(re.sub(r"^#+\s*", "", line))
+
+
 _IMPERATIVE = re.compile(
     r"\b(?:prescribe|start|stop|increase|decrease|switch|adjust|administer|take|hold)\b"
     r".{0,80}\b(?:medication|medicine|drug|dose|tablet|capsule|\d+\s*(?:mg|mcg|ml|iu))\b",
@@ -61,10 +75,10 @@ def sanitize_review(markdown, patient_data):
     current = None
     for raw in str(markdown or "").splitlines():
         line = raw.strip()
-        if not line or line.startswith("```") or line == REQUIRED_ENDING:
+        if not line or line.startswith("```") or _plain(line) == REQUIRED_ENDING:
             continue
         if line.startswith("#"):
-            heading = re.sub(r"^#+\s*", "", line).strip()
+            heading = _heading_name(line)
             current = next((name for name in REVIEW_SECTIONS if heading.casefold() == name.casefold()), None)
             continue
         if current is None or line.startswith("|") or re.fullmatch(r"[-|: ]+", line):
@@ -112,16 +126,27 @@ def validate_review(markdown):
 
 
 def validate_model_review(markdown):
-    """Check the model's four required sections before deterministic additions."""
-    if not markdown or not markdown.startswith("# AI Clinical Review"):
+    """Check the model's four required sections before deterministic additions.
+
+    Lenient on formatting that sanitize_review rebuilds anyway (an optional
+    "# AI Clinical Review" title, heading level/case, a bolded ending line, a
+    carried-over "General Patient Considerations" section). Strict on content:
+    the four sections in order, a non-empty Overall Pattern, and the required
+    ending, whose absence usually means the reply was cut off.
+    """
+    lines = [line.strip() for line in str(markdown or "").splitlines()
+             if line.strip() and not line.strip().startswith("```")]
+    if not lines or _plain(lines[-1]) != REQUIRED_ENDING:
         return False
-    if not markdown.rstrip().endswith(REQUIRED_ENDING):
-        return False
-    headings = re.findall(r"^## (.+)$", markdown, flags=re.M)
-    if headings != list(REVIEW_SECTIONS):
-        return False
-    overall = re.search(r"## Overall Pattern\s+(.+?)(?=\n## )", markdown, flags=re.S)
-    return bool(overall and overall.group(1).strip())
+    headings, overall, current = [], [], None
+    for line in lines[:-1]:
+        if line.startswith("#"):
+            current = _heading_name(line).casefold()
+            if current not in _MODEL_EXTRA_HEADINGS:
+                headings.append(current)
+        elif current == "overall pattern":
+            overall.append(line)
+    return headings == [name.casefold() for name in REVIEW_SECTIONS] and bool(overall)
 
 
 def deterministic_review(patient_data):

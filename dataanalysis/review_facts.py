@@ -5,7 +5,7 @@ import re
 
 from core.config import flag as _flag
 
-PROMPT_VERSION = "clinical_ai_review_v7"
+PROMPT_VERSION = "clinical_ai_review_v8"
 
 # When ENABLE_EXTERNAL_PROMPTS is on, swap to the file-derived hash so that
 # any prompt edit automatically invalidates the review cache.

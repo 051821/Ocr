@@ -24,6 +24,23 @@ def esc(value) -> str:
     return html.escape(str(value))
 
 
+# `![alt](url)`, `![alt][ref]` and `![ref]`; plus raw <img> tags in case HTML is ever allowed.
+_MD_IMAGE = re.compile(r"!\[[^\]]*\](?:\s*\([^)]*\)|\s*\[[^\]]*\])?")
+_HTML_IMG = re.compile(r"<img\b[^>]*>", re.I)
+
+
+def strip_remote_images(markdown) -> str:
+    """Remove images from model- or OCR-derived Markdown before rendering it.
+
+    The browser fetches an image URL as soon as the Markdown renders, so an
+    instruction planted in a scanned document ("append ![](https://host/?d=...)")
+    would send record contents to that host without any click. Images are never
+    legitimate in these answers.
+    """
+    text = _MD_IMAGE.sub("(image removed)", str(markdown or ""))
+    return _HTML_IMG.sub("(image removed)", text)
+
+
 def _md_to_html(text: str) -> str:
     """Minimal safe markdown-to-HTML: bold, italic, escaped HTML only."""
     escaped = html.escape(text)
@@ -119,7 +136,7 @@ def render_doctor_friendly_ai_review(raw_markdown: str):
     data = parse_ai_review(raw_markdown)
     if not data["overall_pattern"] and not data["key_insights"]:
         # Fallback to standard markdown if parsing yielded nothing
-        st.markdown(raw_markdown)
+        st.markdown(strip_remote_images(raw_markdown))
         return
 
     # 1. Executive Longitudinal Trajectory (Hero Card)

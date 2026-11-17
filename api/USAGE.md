@@ -2,7 +2,7 @@
 
 Send a patient ID and get that patient's clinical analysis back as JSON. You never connect to the database.
 
-**API URL:** `https://cultures-tariff-regular-neither.trycloudflare.com`
+**API URL:** `https://<api-url>.onrender.com`
 
 ## Contents
 
@@ -18,11 +18,10 @@ Send a patient ID and get that patient's clinical analysis back as JSON. You nev
 
 ## 1. What you get
 
-- **You get:** patient IDs; doctor IDs and names; age and sex; health history; long-term conditions; patient type and exercise suitability; ongoing medicines; vitals and vital flags; emergency and referral flags per visit; the clinical snapshot; and a rule-based clinical brief.
-- **How it's made:** every answer is worked out fresh from the patient database on each call, by fixed rules. No AI model is involved, so the same record always gives the same answer.
+- **You get:** patient IDs; doctor IDs and names; age and sex; health history; long-term conditions; patient type and exercise suitability; ongoing medicines; vitals and vital flags; emergency and referral flags per visit; the clinical snapshot; a rule-based clinical brief; and the AI-generated clinical analysis.
 - **You don't get:** patient names, phone numbers, addresses, uploaded documents or their OCR text, or the database.
 
-The API has only the 10 endpoints in section 5 (plus `/health`). Anything else returns `404`.
+The API has only the 12 endpoints in section 5 (plus `/health`). Anything else returns `404`.
 
 ---
 
@@ -40,14 +39,14 @@ The API has only the 10 endpoints in section 5 (plus `/health`). Anything else r
 Open this in a browser. It doesn't need a key:
 
 ```
-https://cultures-tariff-regular-neither.trycloudflare.com/health
+https://<api-url>.onrender.com/health
 ```
 
 You should see `{"status":"ok"}`. If the page doesn't load, the API is offline. See [Good to know](#7-good-to-know).
 
 ### Step 3: Try it in the browser (optional)
 
-1. Open `https://cultures-tariff-regular-neither.trycloudflare.com/docs`.
+1. Open `https://<api-url>.onrender.com/docs`.
 2. Click **Authorize**, paste your key, then click **Authorize** again.
 3. Open any endpoint, click **Try it out**, then **Execute**.
 
@@ -64,14 +63,14 @@ pip install requests
 Windows PowerShell, for the current window:
 
 ```powershell
-$env:PATIENT_API_URL = "https://cultures-tariff-regular-neither.trycloudflare.com"
+$env:PATIENT_API_URL = "https://<api-url>.onrender.com"
 $env:PATIENT_API_KEY = "Qs3Bi7LjeUrQVnRYNbVqEzq2NXnbAv8qOX1np_-6BIA"
 ```
 
 macOS or Linux:
 
 ```bash
-export PATIENT_API_URL="https://cultures-tariff-regular-neither.trycloudflare.com"
+export PATIENT_API_URL="https://<api-url>.onrender.com"
 export PATIENT_API_KEY="Qs3Bi7LjeUrQVnRYNbVqEzq2NXnbAv8qOX1np_-6BIA"
 ```
 
@@ -80,7 +79,7 @@ Alternatively, put the same two lines in a `.env` file that's listed in `.gitign
 ### Step 6: Test your key
 
 ```bash
-curl -H "X-API-Key: https://cultures-tariff-regular-neither.trycloudflare.com>" "https://cultures-tariff-regular-neither.trycloudflare.com/doctors"
+curl -H "X-API-Key: <your key>" "https://<api-url>.onrender.com/doctors"
 ```
 
 A list of doctor IDs means everything is working. A `401` means the key is wrong or missing.
@@ -97,7 +96,7 @@ import os
 
 import requests
 
-API_URL = os.environ.get("PATIENT_API_URL", "https://cultures-tariff-regular-neither.trycloudflare.com").rstrip("/")
+API_URL = os.environ.get("PATIENT_API_URL", "https://<api-url>.onrender.com").rstrip("/")
 API_KEY = os.environ.get("PATIENT_API_KEY", "")
 
 _session = requests.Session()
@@ -159,7 +158,7 @@ def doctor_patients(doctor_id, id_prefix="", limit=200):
 # ── One patient ─────────────────────────────────────────────────────────────
 
 def get_summary(patient_id):
-    """Everything for one patient in one call."""
+    """Everything for one patient in one call. Never runs the AI model."""
     return _call("GET", f"/patients/{patient_id}/summary")
 
 
@@ -196,6 +195,32 @@ def get_timeline(patient_id):
 def get_brief(patient_id):
     """The rule-based clinical brief (Markdown), worked out fresh on every call."""
     return get_snapshot(patient_id)["brief"]
+
+
+# ── AI analysis ─────────────────────────────────────────────────────────────
+
+def get_review(patient_id):
+    """The saved AI analysis, or None when there isn't a current one. Never runs the AI model."""
+    try:
+        return _call("GET", f"/patients/{patient_id}/review")
+    except PatientApiError as exc:
+        if exc.status_code == 404:
+            return None
+        raise
+
+
+def generate_review(patient_id, force_refresh=False):
+    """Returns the saved AI analysis, or generates one if none is current (can take minutes).
+
+    force_refresh=True regenerates it even when a current one exists. Use sparingly: it costs money.
+    """
+    params = {"force_refresh": "true"} if force_refresh else None
+    return _call("POST", f"/patients/{patient_id}/review", params=params, timeout=300)
+
+
+def get_or_generate_review(patient_id):
+    """The saved AI analysis if there is one; otherwise generate it once."""
+    return get_review(patient_id) or generate_review(patient_id)
 ```
 
 ---
@@ -244,6 +269,17 @@ print("Doctors:", {v["doctor_id"] for v in s["visits"] if v["doctor_id"]})
 print(api.get_brief("<patient_id>"))   # Markdown, rule-based, fresh on every call
 ```
 
+### Get the AI analysis
+
+```python
+s = api.get_summary("<patient_id>")
+if s["ai_review"]:
+    print(s["ai_review"]["markdown"])        # already saved, so it's instant
+else:
+    review = api.generate_review("<patient_id>")  # can take a few minutes
+    print(review["raw_markdown"])
+```
+
 ### Search a doctor's patients by the start of a patient ID
 
 ```python
@@ -270,18 +306,20 @@ except api.PatientApiError as e:
 
 Every endpoint needs the `X-API-Key` header. Dates are `YYYY-MM-DD` unless noted otherwise.
 
-| # | Method and path | Python helper | What it returns |
-|---|---|---|---|
-| 1 | `GET /patients/{patient_id}/summary` | `get_summary` | **Start here.** Everything for one patient |
-| 2 | `GET /patients` | `list_patients` | All patient IDs |
-| 3 | `GET /doctors` | `list_doctors` | Doctor IDs and names with patient counts |
-| 4 | `GET /doctors/{doctor_id}/patients` | `doctor_patients` | One doctor's patients |
-| 5 | `GET /patients/{patient_id}/snapshot` | `get_snapshot`, `get_brief` | Snapshot, clinical course, rule-based clinical brief |
-| 6 | `GET /patients/{patient_id}/patient-type` | `get_patient_type` | Patient type and exercise suitability |
-| 7 | `GET /patients/{patient_id}/long-term-conditions` | `get_long_term_conditions` | Long-term conditions |
-| 8 | `GET /patients/{patient_id}/medications` | `get_medications` | Medicine changes per visit |
-| 9 | `GET /patients/{patient_id}/timeline` | `get_timeline` | Visit timeline as text |
-| 10 | `GET /patients/{patient_id}/demographics` | `get_demographics` | Age and sex only (fastest call) |
+| # | Method and path | Python helper | What it returns | Uses AI? |
+|---|---|---|---|---|
+| 1 | `GET /patients/{patient_id}/summary` | `get_summary` | **Start here.** Everything for one patient | No |
+| 2 | `GET /patients` | `list_patients` | All patient IDs | No |
+| 3 | `GET /doctors` | `list_doctors` | Doctor IDs and names with patient counts | No |
+| 4 | `GET /doctors/{doctor_id}/patients` | `doctor_patients` | One doctor's patients | No |
+| 5 | `GET /patients/{patient_id}/snapshot` | `get_snapshot`, `get_brief` | Snapshot, clinical course, rule-based clinical brief | No |
+| 6 | `GET /patients/{patient_id}/patient-type` | `get_patient_type` | Patient type and exercise suitability | No |
+| 7 | `GET /patients/{patient_id}/long-term-conditions` | `get_long_term_conditions` | Long-term conditions | No |
+| 8 | `GET /patients/{patient_id}/medications` | `get_medications` | Medicine changes per visit | No |
+| 9 | `GET /patients/{patient_id}/timeline` | `get_timeline` | Visit timeline as text | No |
+| 10 | `GET /patients/{patient_id}/demographics` | `get_demographics` | Age and sex only (fastest call) | No |
+| 11 | `GET /patients/{patient_id}/review` | `get_review` | The saved AI analysis | No |
+| 12 | `POST /patients/{patient_id}/review` | `generate_review` | Generates the AI analysis if none is current. `quick_ai` holds the AI wording of the quick tier (`null` = rule-built). | Yes |
 
 ### 1. Patient summary: `GET /patients/{patient_id}/summary`
 
@@ -300,6 +338,7 @@ Every endpoint needs the `X-API-Key` header. Dates are `YYYY-MM-DD` unless noted
 | `vitals` | list | Per visit, newest first: `[{"visit_id", "visit_date", "readings": [{"label", "value", "date", "source"}]}]`. Visits with no recorded vitals are left out. |
 | `vital_flags` | list | Out-of-range vitals flagged by the clinic app on the last 5 completed visits, newest first: `[{"visit_id", "date", "metric", "code", "severity", "value"}]`. `severity` is `ABNORMAL` or `CRITICAL`; implausible readings are left out. |
 | `clinical_snapshot` | object | Same as `snapshot` in endpoint 5 |
+| `ai_review` | object or `null` | `{"markdown", "model_name", "generated_at"}`. `null` until an AI analysis exists for the patient's current record. |
 
 A vitals reading looks like `{"label": "BP", "value": "130/80 mmHg", "date": "2026-01-01", "source": "Structured record"}`.
 
@@ -429,13 +468,28 @@ Reads only the patient row, so it's much faster than `/summary` when you just ne
 
 `age_years` and `sex` can be `null` if they weren't recorded; `age_sex` is then `null` too when both are missing.
 
+### 11. AI analysis (saved): `GET /patients/{patient_id}/review`
+
+Returns the AI analysis if one exists for the patient's current record, and `404` if not.
+
+```json
+{"patient_id": "0b1c...", "raw_markdown": "...", "model_name": "...", "model_version": "...",
+ "generated_at": "...", "cache_hit": true, "status": "..."}
+```
+
+### 12. Generate the AI analysis: `POST /patients/{patient_id}/review`
+
+Same response as endpoint 11. If a current analysis is already saved, you get that one straight away. Otherwise the model writes a new one, which can take a few minutes, so set your timeout to 300 seconds.
+
+`?force_refresh=true` regenerates it even when a current one exists. Use this sparingly: each run calls the AI model and costs the clinic money.
+
 ## 6. Errors
 
 | Status | Meaning | What to do |
 |---|---|---|
 | `0` (Python helper only) | The API couldn't be reached | It's offline or the URL changed. See section 7. |
 | `401` | The key is missing or wrong | Check `PATIENT_API_KEY` |
-| `404` | The patient has no clinical visits, or the endpoint doesn't exist | Use only the endpoints in section 5 |
+| `404` | The patient has no clinical visits, no AI analysis exists yet (endpoint 11), or the endpoint doesn't exist | For endpoint 11, call endpoint 12; otherwise use only the endpoints in section 5 |
 | `422` | A parameter is invalid, for example `q` contains characters other than hex and `-` | Fix the parameter |
 | `502` | The server couldn't load the patient's data | Try again; if it persists, contact the API owner |
 | `503` | The server isn't configured | Contact the API owner |
@@ -445,6 +499,7 @@ Reads only the patient row, so it's much faster than `/summary` when you just ne
 ## 7. Good to know
 
 - **Availability:** the API is hosted and always on. If `/health` doesn't respond, contact the API owner.
-- **Always fresh:** nothing is saved between calls, so every answer reflects the patient database at the moment you ask.
-- **Speed:** most calls take a few seconds.
+- **Fresh vs saved:** every endpoint except the two `/review` ones is worked out fresh from the patient database on each call. The AI analysis is saved, not generated on every call: `/summary` and `GET /review` never run the AI model. Only `POST /review` does, and only when no current analysis exists, or when you pass `force_refresh=true`.
+- **When the analysis is `null`:** the patient's record has changed since the last analysis, or no analysis has been made yet. Generate one with `POST /review`.
+- **Speed:** most calls take a few seconds. Generating an AI analysis can take a few minutes.
 - **Patient privacy:** the data is real patients' health records. Store it securely, don't share your key, and use it only for the agreed work.

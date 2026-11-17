@@ -1,0 +1,47 @@
+# Render Blueprint: hosts ONLY the endpoints shared with teammates (api/public_main.py).
+# No disk: saved AI reviews live in your own Supabase cache project (CACHE_DATABASE_URL), shared with the laptop.
+# Secrets (sync: false) are typed into the Render dashboard on first deploy; they never live in git.
+services:
+  - type: web
+    name: patient-intelligence-api
+    runtime: python
+    region: singapore          # closest Render region to India
+    plan: starter              # always on (~$7/month). "free" also works but sleeps after 15 idle minutes.
+    buildCommand: pip install -r requirements-api.txt
+    startCommand: uvicorn api.public_main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.7
+      # --- copy these values from your local .env ---
+      - key: DATABASE_URL          # clinic patient database (read only)
+        sync: false
+      - key: CACHE_DATABASE_URL    # YOUR Supabase project, Session pooler URL (IPv4)
+        sync: false
+      - key: READONLY_API_KEYS     # the teammate's key(s); no full-access API_KEY on this server
+        sync: false
+      - key: OPENROUTER_API_KEY    # AI model for POST /review
+        sync: false
+      - key: LLM_BACKEND
+        sync: false
+      - key: CACHE_ENCRYPTION_KEY  # must match the laptop, or saved reviews can't be read
+        sync: false
+      - key: AUDIT_HASH_SALT       # must match the laptop
+        sync: false
+      - key: CACHE_TTL_DAYS
+        sync: false
+      # --- feature flags: same values as your local .env ---
+      - key: ENABLE_HARDENED_CONFIG
+        sync: false
+      - key: ENABLE_ENCRYPTED_CACHE
+        sync: false
+      - key: ENABLE_ANONYMIZED_AUDIT_LOGS
+        sync: false
+      - key: ENABLE_EXTERNAL_PROMPTS
+        sync: false
+      - key: ENABLE_PROMPT_INJECTION_SANDBOX
+        sync: false
+      - key: ENABLE_ANSWER_VERIFICATION
+        sync: false
+      - key: ENABLE_FULL_RECORD_CONTEXT
+        sync: false

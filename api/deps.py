@@ -19,6 +19,8 @@ READONLY_ROUTES = {
     ("GET", "/patients/{patient_id}/long-term-conditions"),
     ("GET", "/patients/{patient_id}/medications"),
     ("GET", "/patients/{patient_id}/timeline"),
+    ("GET", "/patients/{patient_id}/review"),
+    ("POST", "/patients/{patient_id}/review"),
     ("GET", "/doctors"),
     ("GET", "/doctors/{doctor_id}/patients"),
 }

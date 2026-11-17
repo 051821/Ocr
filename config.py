@@ -2,8 +2,12 @@
 Central configuration for the OCR pipeline.
 """
 import os
-import torch
 from dotenv import load_dotenv
+
+try:  # The OCR pipeline needs torch; the hosted API (api/public_main.py) imports this file without it.
+    import torch
+except ImportError:
+    torch = None
 
 load_dotenv()
 
@@ -75,7 +79,7 @@ MAX_RAW_SCAN = _env_int("MAX_RAW_SCAN", 3000)      # safety cap while scanning f
 # ---------------------------------------------------------------------------
 CLIP_MODEL_NAME = "ViT-B-32"
 CLIP_PRETRAINED = "openai"
-CLIP_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+CLIP_DEVICE = "cuda" if torch is not None and torch.cuda.is_available() else "cpu"
 CLIP_BATCH_SIZE = 64
 TILE_GRID = (3, 2)
 
@@ -261,7 +265,8 @@ CLIP_CACHE_SAVE_EVERY = _env_int("CLIP_CACHE_SAVE_EVERY", 200)
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-if not OPENROUTER_API_KEY:
+# RULES_ONLY=true (set by api/public_main.py): no AI calls anywhere, so no key is needed.
+if not OPENROUTER_API_KEY and os.getenv("RULES_ONLY", "").lower() != "true":
     raise RuntimeError(
         "OPENROUTER_API_KEY is not set. Check your .env file."
     )

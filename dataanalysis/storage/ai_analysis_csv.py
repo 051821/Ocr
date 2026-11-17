@@ -1,4 +1,9 @@
-"""SQLite-backed review and LLM cache with a legacy import shim name."""
+"""Review and LLM cache with a legacy import shim name.
+
+Backend: Postgres when CACHE_DATABASE_URL is set (your own Supabase project, shared by the laptop and the
+hosted API), else the local SQLite file. CACHE_DATABASE_URL must never be the clinic DATABASE_URL.
+An explicit `path=` always means SQLite (tests, cache_admin --db-path).
+"""
 import csv
 import json
 import logging
@@ -75,7 +80,102 @@ def _calc_patient_hash(patient_id: str | None) -> str | None:
     return hmac.new(salt, str(patient_id).strip().encode("utf-8"), hashlib.sha256).hexdigest()[:16]
 
 
+_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS ai_review (
+    patient_id TEXT PRIMARY KEY,
+    source_hash TEXT,
+    prompt_version TEXT NOT NULL,
+    model TEXT,
+    review_md TEXT NOT NULL,
+    visit_count INTEGER NOT NULL DEFAULT 0,
+    visit_hashes TEXT NOT NULL DEFAULT '{}',
+    mismatch_count INTEGER NOT NULL DEFAULT 0,
+    generated_at TEXT NOT NULL,
+    quick_json TEXT
+);
+CREATE TABLE IF NOT EXISTS llm_cache (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    patient_hash TEXT
+);
+CREATE TABLE IF NOT EXISTS chat_faq (
+    patient_id TEXT NOT NULL,
+    qkey TEXT NOT NULL,
+    question TEXT NOT NULL,
+    hits INTEGER NOT NULL DEFAULT 1,
+    last_asked TEXT NOT NULL,
+    PRIMARY KEY (patient_id, qkey)
+);
+CREATE TABLE IF NOT EXISTS doctor_settings (
+    doctor_id TEXT PRIMARY KEY,
+    default_view TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""
+_PG_POOL = None
+
+
+def _pg_url():
+    """CACHE_DATABASE_URL, refusing the clinic database so cache tables are never created there."""
+    url = os.getenv("CACHE_DATABASE_URL", "").strip()
+    if url and url == os.getenv("DATABASE_URL", "").strip():
+        raise RuntimeError("CACHE_DATABASE_URL must be your own cache database, not the clinic DATABASE_URL.")
+    return url
+
+
+class _PgConn:
+    """Postgres connection with the sqlite3 surface this module uses: execute() with '?' placeholders
+    returning a cursor of dict rows, `with conn:` as a transaction, and close()."""
+
+    def __init__(self, pool):
+        self._pool = pool
+        self._conn = pool.getconn()
+
+    def execute(self, sql, params=()):
+        from psycopg2.extras import RealDictCursor
+        cur = self._conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(sql.replace("?", "%s"), tuple(params))
+        return cur
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type:
+            self._conn.rollback()
+        else:
+            self._conn.commit()
+        return False
+
+    def close(self):
+        if self._conn is not None:
+            self._conn.rollback()  # end any read-only transaction before returning it to the pool
+            self._pool.putconn(self._conn)
+            self._conn = None
+
+
+def _connect_pg(url):
+    global _PG_POOL
+    with _SCHEMA_LOCK:
+        if _PG_POOL is None:
+            from psycopg2.pool import ThreadedConnectionPool
+            pool = ThreadedConnectionPool(1, int(os.getenv("CACHE_DB_POOL_MAX", "5")), dsn=url)
+            conn = pool.getconn()
+            try:
+                with conn, conn.cursor() as cur:
+                    cur.execute(_SCHEMA_SQL)
+            finally:
+                pool.putconn(conn)
+            _PG_POOL = pool
+    return _PgConn(_PG_POOL)
+
+
 def _connect(path=None):
+    if path is None:
+        url = _pg_url()
+        if url:
+            return _connect_pg(url)
     db_path = Path(path or _DEFAULT_DB_PATH)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), timeout=10)
@@ -373,7 +473,7 @@ def record_chat_question(patient_id, question, path=None):
                 "INSERT INTO chat_faq(patient_id, qkey, question, hits, last_asked) "
                 "VALUES (?, ?, ?, 1, ?) "
                 "ON CONFLICT(patient_id, qkey) DO UPDATE SET "
-                "hits = hits + 1, question = excluded.question, last_asked = excluded.last_asked",
+                "hits = chat_faq.hits + 1, question = excluded.question, last_asked = excluded.last_asked",
                 (str(patient_id), qkey, str(question).strip(), now_iso),
             )
             conn.execute(

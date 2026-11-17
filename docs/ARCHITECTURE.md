@@ -127,7 +127,9 @@ To preserve all current public interfaces and import paths, existing files map i
 
 | Layer | Target Role | Existing Source Files & Facades |
 | :--- | :--- | :--- |
-| **UI Layer** | Presentation & Rendering | `app.py`, `csv_dashboard.py`, `ui_components.py`, `ui/styles.css` |
+| **UI Layer** | Presentation & Rendering | `app.py`, `csv_dashboard.py`, `ui_components.py`, `insight_tabs.py`, `ui/styles.css`, `ui/insight_tabs.css` |
+| **API Layer** | HTTP facade the UI calls | `api/routers/patients.py` (incl. `GET /patients/{id}/insight-view`), `dataanalysis/api_client.py` |
+| **View Builders** | Read-only view data over the pipeline (no LLM) | `insight_view.py`, `snapshot_view.py`, `area_tiles.py`, `medicine_grid.py` |
 | **Service Layer** | Business Use Cases & Workflows | `services/review_service.py`, `services/medication_journey.py`, `services/timeline.py`, `services/graph_service.py`, `services/chat/answers.py`, `services/chat/retrieval.py`, `ai_review_service.py` |
 | **Domain Layer** | Business Rules, Intent & Safety | `review_rules.py` (sanitization/safety), `review_facts.py` (canonical facts/hashing), `dataanalysis/data/reference/*.json` (reference datasets), `patient_timeline.py`, `medication_journey.py` |
 | **Adapters: Storage** | Data Ingestion & Caching | `core/db.py`, `database.py`, `core/fetching.py`, `analysis.py` (PostgreSQL history reader), `storage/ai_analysis_csv.py`, `storage/cache_db.py` (SQLite `data/cache.db`) |
@@ -265,3 +267,48 @@ All steps are feature-flagged off by default (`ENABLE_<FEATURE>=False`) to guara
 - **Action:** Enforce Streamlit login/session verification before patient selector or database querying is rendered.
 - **Rollback:** Set `ENABLE_AUTH_GATE=False`.
 - **Test to Add:** `tests/test_auth_gate.py` (verifies unauthenticated requests cannot fetch patient lists).
+
+### Step 11: Full-Record Chat Context
+- **Flag Name:** `ENABLE_FULL_RECORD_CONTEXT` (Default: `False`)
+- **Files Touched:** `dataanalysis/patient_chat.py`, `dataanalysis/evals/retrieval_eval.py`
+- **Action:** When a patient's structured entries (encounter summaries, medication changes, labs, vitals, follow-ups, document findings) fit in `_FULL_RECORD_MAX_WORDS` (5000 words, ~6.5k tokens), send them all to the chat LLM and use BM25 only to pick scanned-document excerpts and the asked-about drug's side-effect reference. Larger records keep ranked retrieval. `meta["context_mode"]` records which was used; flag state is part of the chat cache key. Sends more of the record per question, so it should ship with or after Step 8.
+- **Rollback:** Set `ENABLE_FULL_RECORD_CONTEXT=False`.
+- **Test:** `tests/test_full_record_context.py`; `tests/test_retrieval_eval.py` runs every eval case in both modes (`python -m evals.retrieval_eval --full` from `dataanalysis/`).
+
+### Step 12: Chat Answer Verification
+- **Flag Name:** `ENABLE_ANSWER_VERIFICATION` (Default: `False`)
+- **Files Touched:** `dataanalysis/answer_verification.py`, `dataanalysis/patient_chat.py`
+- **Action:** After generation, drop each answer line that cites an encounter the patient doesn't have, or a date, dose, lab value or BP not present in the evidence sent to the LLM. Lines about thresholds/typical ranges are treated as general knowledge and only their encounters and dates are checked. If nothing remains, the deterministic fallback answers. Only the kinds of dropped claims go to `meta["verification_dropped"]`, never the values. Flag state is part of the chat cache key.
+- **Rollback:** Set `ENABLE_ANSWER_VERIFICATION=False`.
+- **Test:** `tests/test_answer_verification.py`.
+
+### Step 13: Patient-Specific Review Evidence
+- **Flag Name:** none (replaces the previous review context; `PROMPT_VERSION` bumped to `clinical_ai_review_v10`, so every cached review regenerates once).
+- **Files Touched:** `dataanalysis/clinical_insights.py` (new), `dataanalysis/data/reference/lab_significance.json` (new), `dataanalysis/Zai_analysis.py`, `dataanalysis/review_rules.py`, `dataanalysis/review_facts.py`, `dataanalysis/ai_review_service.py`, `dataanalysis/clinical_snapshot.py`, `dataanalysis/ui_components.py`, `prompts/review_*.md`; `data/reference/considerations.json` removed.
+- **Action:** `clinical_insights.build_insight_evidence()` turns the record into an evidence pack: conditions labelled confirmed / working diagnosis / known history / suspected / document only; medicines with the recorded condition each one treats; every adverse out-of-range lab with exact value, unit, reference range and its source (report or standard adult range), earlier/later results and plain-language significance from `lab_significance.json`; possibilities that results raise but the record never diagnoses (`control_labs` in the condition registry); snapshot flags routed by `kind`; follow-up gaps (unrepeated abnormal results, advised tests without results, pending or unresolved follow-ups). The model writes one concise Clinical Insights list (3-6 themed bullets, under ~170 words) from that pack only. `review_rules.sanitize_review()` adds the Overview line, the Abnormal Results details and the Evidence list from the record, drops insight lines with values/dates/doses not in the pack (`answer_verification`), medicine-change suggestions, empty themes or a diagnosis status the record does not support, and falls back to `deterministic_insights()` when nothing survives. The UI shows the overview and insights; lab details and source encounters are collapsed. Clinical knowledge lives in the reference JSON files, never in code or prompts.
+- **Rollback:** Revert the files above; restore `considerations.json`.
+- **Test:** `tests/test_clinical_insights.py`, `tests/test_llm_output_gating.py`, `tests/test_phase3_deterministic.py`.
+
+### Step 14: Insight View for the AI Analysis & Summary and Lab Results Tabs
+- **Flag Name:** none (read-only view; no LLM call, no prompt or cache change).
+- **Files Touched:** `dataanalysis/insight_view.py` (new), `dataanalysis/insight_tabs.py` (new), `dataanalysis/ui/insight_tabs.css` (new), `api/routers/patients.py`, `dataanalysis/api_client.py`, `dataanalysis/app.py`.
+- **Action:** The two tabs now show the same view as the static Patient Insight Review page, built from the live pipeline.
+
+  ```mermaid
+  flowchart LR
+      PC["services.patient_context<br/>(cached record)"] --> IV["insight_view.build_view()"]
+      RV["review_service<br/>(cached review only)"] --> IV
+      IV -->|"build_insight_evidence · build_snapshot ·<br/>deterministic_insights · build_clinical_course ·<br/>snapshot_view.tag_review / tag_brief"| API["GET /patients/{id}/insight-view"]
+      API --> AC["api_client.get_insight_view()"]
+      AC --> APP["app.py<br/>(session_state['insight_view'])"]
+      APP --> T["insight_tabs.py<br/>st.html + scoped JS/CSS (.cdx)"]
+      T --> AI["AI Analysis & Summary tab"]
+      T --> LAB["Lab Results tab"]
+  ```
+
+  - `insight_view.build_view(patient_data, review)` returns `{"patient": …, "ai_checks": […]}`. Per patient it holds: the visits (`#n` numbering, oldest first), every lab row (same test + value + date shown once via `lab_validation.drop_same_day_duplicates`) and the lab counts; each snapshot flag with the **raw rows it was built from** (`raw_for_flag`) and the **rule that produced it** (`rule_for`, paraphrased from the pipeline code); the rule-based brief and the AI brief split into themes, each with its evidence-pack data and related flags; and one **merged Patient Brief** (`merged_brief`): every AI point, then each rule point the AI did not already make, each marked `both` / `ai` / `rule`. A rule point counts as made when an AI point states the same rule flag (`clinical_insights._point_flag`) or the same fact in other words (`_content_words` overlap). Key-finding points carry links to the concerns they stand for (`kf_links`). It also returns the status tiles and medicine grid HTML, the concern order and groups, the guideline rows, the Clinical Course, unlinked documents and the validator corrections (`patient_data["_review_metrics"]`).
+  - The endpoint never runs the model: the AI part is the cached review when `is_review_current()`, otherwise the tab shows the rule-based brief alone. **Generate AI brief / Force Refresh** (`POST /review`) is the only LLM call; the app then refetches the view.
+  - `insight_tabs.py` renders with the static page's own JavaScript renderers inside `st.html(..., unsafe_allow_javascript=True)`, each tab in its own `.cdx` container (styles scoped in `ui/insight_tabs.css` so they cannot clash with Streamlit's). **AI tab:** status tiles (click to highlight their points) → Patient Brief cards (short leading labels in bold; `AI + Rule` / `AI · checked` / `Rule-based` marks; `#n` citations open that visit; `→ concern n` jumps to the concern; "Evidence and rule" per theme) → checks every AI point went through, lab details, source visits, raw Markdown → highlighted concerns grouped by topic (each opens to full evidence, raw data used and rule) → also noted / data quality / guideline context → visit grid and medicine grid (click a column to open the visit) → Clinical Course → documents not linked to a visit. **Lab Results tab:** test, value, reference, status badge, source (`#n (date)` or the unlinked report), note; out-of-range rows highlighted; All / Out-of-range-only filter.
+  - Data passed to the page is JSON-escaped for `<script>`; all values are HTML-escaped by the renderer (`esc`). Patients are identified by ID only. The view sends nothing to outside services (the static page's feedback form is not part of the pipeline UI).
+- **Rollback:** Revert `app.py` and `api/routers/patients.py`; delete `insight_view.py`, `insight_tabs.py`, `ui/insight_tabs.css` (the previous tabs used `ui_components.render_doctor_friendly_ai_review` / `render_clinical_snapshot` / `render_clinical_course`, which are still in place).
+- **Test:** full suite (`pytest` in `dataanalysis/`); `GET /patients/{id}/insight-view` returns 200 with `merged`, `flags[].raw`, `flags[].rule`, `labs`.

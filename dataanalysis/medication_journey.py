@@ -1,6 +1,6 @@
 """Medication Journey and Longitudinal Change Tracking.
 
-Deterministic analysis of how medications change across patient encounters.
+Deterministic analysis of how medications change across patient visits.
 Detects:
 - started / added
 - continued
@@ -9,6 +9,7 @@ Detects:
 - newly documented (from clinical documents)
 - structured prescription vs document mismatches
 """
+from core.encounters import dose_not_specified, unclear_dose
 import re
 
 try:
@@ -75,7 +76,7 @@ def _extract_explicit_discontinuations(visit, known_prescriptions):
 def compute_medication_journey(patient_data):
     """Compute chronological medication changes across visits.
 
-    Returns a list of encounter change dicts:
+    Returns a list of visit change dicts:
     [
         {
             "visit_id": str,
@@ -129,6 +130,11 @@ def compute_medication_journey(patient_data):
         for dm_str in v.get("document_medications", []) or []:
             doc_meds_raw.append({"name": str(dm_str)})
 
+        # 0-0-0 with no duration states nothing: reported as unclear and never counted as active. 0-0-0 with a
+        # duration is a prescription whose dosing was not entered: active, noted "dose not specified".
+        zero_rx = [rx for rx in rx_list if unclear_dose(rx)]
+        rx_list = [rx for rx in rx_list if not unclear_dose(rx)]
+
         # Deduplicate current visit prescriptions by lowercase name
         current_rx = {}
         for rx in rx_list:
@@ -137,7 +143,7 @@ def compute_medication_journey(patient_data):
             if med_key and not _is_lab_term(display_name):
                 current_rx[med_key] = {
                     "name": display_name,
-                    "dosage": str(rx.get("dosage") or "").strip(),
+                    "dosage": "dose not specified" if dose_not_specified(rx) else str(rx.get("dosage") or "").strip(),
                     "frequency": str(rx.get("frequency") or "").strip(),
                     "duration": str(rx.get("duration") or "").strip(),
                 }
@@ -210,6 +216,15 @@ def compute_medication_journey(patient_data):
                 "discontinued": False,
             }
 
+        for rx in zero_rx:
+            name, med_key = _display_name(rx.get("name")), _normalize_name(rx.get("name"))
+            if not med_key or _is_lab_term(name) or med_key in current_rx:
+                continue
+            encounter_changes.append({"type": "unclear_dose", "medication": name,
+                                      "text": f"No dose stated: {name} written 0-0-0 (unclear; not counted as active)"})
+            if med_key in known_prescriptions:
+                known_prescriptions[med_key]["discontinued"] = True
+
         # 2. Check for explicit discontinuations documented in record
         explicit_stops = _extract_explicit_discontinuations(v, known_prescriptions)
         for stop_name in explicit_stops:
@@ -269,7 +284,7 @@ def format_medication_journey_text(journey_data):
 
     lines = []
     for enc in journey_data:
-        lines.append(f"### {enc['visit_date']} (Encounter {enc['visit_index']})")
+        lines.append(f"### {enc['visit_date']} (Visit {enc['visit_index']})")
         if not enc["changes"]:
             lines.append("No medication changes or prescriptions documented.")
         else:

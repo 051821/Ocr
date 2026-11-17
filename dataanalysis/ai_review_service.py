@@ -2,6 +2,8 @@
 import json
 import logging
 
+import quick_review
+from core.tracing import annotate_run, traced
 from Zai_analysis import analyze_patient_incremental, analyze_patient_with_ai
 from review_facts import PROMPT_VERSION, build_review_facts, compute_source_hash, visit_hashes
 from review_rules import deterministic_review, sanitize_review, validate_model_review, validate_review
@@ -23,6 +25,14 @@ def _read_review(row):
     return str((row or {}).get("review_md") or "")
 
 
+def _read_quick(row):
+    """The stored AI quick tier ({'headline', 'lines', 'model'}) or None."""
+    try:
+        return json.loads(row.get("quick_json") or "null")
+    except (TypeError, ValueError):
+        return None
+
+
 def _valid_review(markdown):
     """Compatibility wrapper for structure-only review validation."""
     return validate_review(markdown)
@@ -42,6 +52,17 @@ def _ensure_facts(patient_data):
     return facts, hashes, source_hash
 
 
+def _one_line_course(markdown, patient_data):
+    """Course as one line (presenting · recurring), and no visit date on undated-only findings, for generated and
+    cached reviews alike."""
+    from clinical_insights import build_insight_evidence, refresh_record_lines
+    try:
+        return refresh_record_lines(markdown, build_insight_evidence(patient_data))
+    except Exception as exc:  # never lose a review over the Course line
+        logger.warning("Course line not applied: %s", exc)
+        return markdown
+
+
 def is_review_current(patient_data):
     """Check the cached review using source facts prepared by the caller."""
     source_hash = patient_data.get("_review_source_hash")
@@ -57,6 +78,7 @@ def is_review_current(patient_data):
     )
 
 
+@traced(name="ai_review.get_or_generate_review")
 def get_or_generate_review(patient_data, force_refresh=False):
     """Return a cached review or generate and persist one review update."""
     _, current_hashes, current_hash = _ensure_facts(patient_data)
@@ -70,8 +92,12 @@ def get_or_generate_review(patient_data, force_refresh=False):
     if same_source and current_prompt and not force_refresh and not is_fallback:
         markdown = _read_review(row)
         if _valid_review(markdown):
+            markdown = _one_line_course(markdown, patient_data)
+            annotate_run({"patient_id": patient_id, "review_mode": "cached", "model": row.get("model")},
+                         tags=["review:cached"])
             return {
                 "raw_markdown": markdown,
+                "quick_ai": _read_quick(row),
                 "model_name": row.get("model", ""),
                 "model_version": "",
                 "generated_at": row.get("generated_at", ""),
@@ -91,13 +117,9 @@ def get_or_generate_review(patient_data, force_refresh=False):
     )
 
     if should_increment:
-        changed_visits = [
-            visit for visit in patient_data.get("visits", [])
-            if str(visit.get("visit_id", "")) in changed_ids
-        ]
-        incremental_data = {**patient_data, "visits": changed_visits, "total_visits": len(patient_data.get("visits", []))}
+        # The update sees the whole evidence pack (it is compact) plus which encounters changed.
         generate = lambda feedback=None: analyze_patient_incremental(
-            _read_review(row), incremental_data, 0, None, retry_feedback=feedback
+            _read_review(row), patient_data, changed_ids, retry_feedback=feedback
         )
         next_mismatch = mismatch_count + 1
         status = "Incremental review generated and saved."
@@ -110,7 +132,8 @@ def get_or_generate_review(patient_data, force_refresh=False):
         report = generate()
         markdown = report.get("raw_markdown", "")
         if not validate_model_review(markdown):
-            report = generate("Use exactly the four required headings, a non-empty Overall Pattern, and the required exact ending.")
+            report = generate("Use exactly one heading, '## Clinical Insights', followed by 4-5 bullets (Course, "
+                              "Conditions, Key findings, Treatment, Gaps to check), and the required exact ending.")
             markdown = report.get("raw_markdown", "")
     except Exception as exc:
         logger.warning("AI review generation failed; using deterministic record summary: %s", exc)
@@ -121,7 +144,11 @@ def get_or_generate_review(patient_data, force_refresh=False):
     if not _valid_review(markdown):
         markdown = deterministic_review(patient_data)
         report["model_name"], report["model_version"] = FALLBACK_MODEL, ""
+    markdown = _one_line_course(markdown, patient_data)
     report["raw_markdown"] = markdown
+    # Quick tier: a second, small call; None (rule-built quick tier) when the model is unavailable or fails.
+    report["quick_ai"] = (quick_review.generate(patient_data)
+                          if report.get("model_name") != FALLBACK_MODEL else None)
     saved_row = upsert_ai_analysis(
         patient_data,
         markdown,
@@ -130,5 +157,9 @@ def get_or_generate_review(patient_data, force_refresh=False):
         mismatch_count=next_mismatch,
         source_hash=current_hash,
         hashes=current_hashes,
+        quick_json=report["quick_ai"],
     )
+    mode = "fallback" if report.get("model_name") == FALLBACK_MODEL else ("incremental" if should_increment else "full")
+    annotate_run({"patient_id": patient_id, "review_mode": mode, "model": report.get("model_name"),
+                  "changed_visits": len(changed_ids), "force_refresh": force_refresh}, tags=[f"review:{mode}"])
     return {**report, "generated_at": saved_row.get("generated_at", ""), "cache_hit": False, "status": status}

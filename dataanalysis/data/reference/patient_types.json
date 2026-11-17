@@ -1,0 +1,38 @@
+{
+  "_doc": "Body-system patient types (clusters). Each pattern is matched (case-insensitive) against a visit's diagnoses and chief complaint. A visit or patient can match several types; the highest-scoring one is the cluster. exercise is the cluster rule: 'benefit' (regular exercise helps), 'neutral' (no specific benefit, no harm) or 'avoid' (acute illness/injury: rest until recovered; only blocks exercise while current). Add or edit entries here without code changes.",
+
+  "negation_pattern": "\\b(?:no|nil|without|r/o|rule\\s*out)\\s+\\w+",
+
+  "types": [
+    {"name": "Neurological", "exercise": "benefit",
+     "pattern": "headache|migrain|vertigo|dizz|giddi|neuropath|neuralgi|tingling|numbness|seizur|epilep|convuls|\\bphn\\b|post\\s*herpetic|radicul|\\brad\\b|myelopath|sciatica|paralys|stroke|\\bcva\\b|palsy|tremor|parkinson|syncope"},
+    {"name": "Mental health / Stress", "exercise": "benefit",
+     "pattern": "anxiety|depress|stress|tension(?!\\s*(?:type\\s*)?headache)|insomnia|sleep|panic|psych|\\bocd\\b|bipolar|schizo|alcohol|addiction"},
+    {"name": "Musculoskeletal", "exercise": "benefit",
+     "pattern": "joint|knee|\\boa\\b|osteoarth|arthr|\\bdjd\\b|spondyl|back\\s*(?:ache|pain)|backache|\\blba\\b|\\blbp\\b|lumbago|lumbar|cervical\\s*(?:pain|spondy)|neck\\s*pain|shoulder|myalg|mayalg|myofascial|body\\s*(?:pain|ache)|bodyache|leg\\s*pain|hand\\s*pain|foot\\s*pain|heel\\s*pain|plantar|waist\\s*pain|\\bra\\b|rheumat|gout|sprain|orthop|frozen"},
+    {"name": "Respiratory", "exercise": "neutral",
+     "pattern": "\\burti\\b|\\blrti\\b|\\buri\\b|upper\\s*resp|lower\\s*resp|cough|\\bcold\\b|\\bflu\\b|influenza|asthma|\\bcopd\\b|bronch|pneumon|wheez|breath|\\btb\\b|tubercul"},
+    {"name": "ENT", "exercise": "neutral",
+     "pattern": "\\bear\\b|\\bcsom\\b|\\bwax\\b|otitis|throat|pharyng|tonsil|sinus|rhinit|\\bent\\b|epistaxis|hearing"},
+    {"name": "Fever / Infection", "exercise": "avoid",
+     "pattern": "\\bafi\\b|fever|febrile|viral|dengue|malaria|typhoid|enteric|varicella|chicken\\s*pox|herpes|zoster|measles|mumps"},
+    {"name": "Cardiovascular", "exercise": "benefit",
+     "pattern": "\\bhtn\\b|\\bht\\b|hypertens|\\bbp\\b|blood\\s*pressure|\\bcad\\b|\\bihd\\b|coronar|angina|chest\\s*pain|heart|cardi|dyslipid|cholesterol|hypotension|palpitat|edema|oedema"},
+    {"name": "Diabetes / Endocrine", "exercise": "benefit",
+     "pattern": "\\bt2dm\\b|\\bdm\\b|diabet|sugar|thyroid|hypothyr|hyperthyr|endocrin|obes"},
+    {"name": "Gastrointestinal", "exercise": "benefit",
+     "pattern": "gastr|\\bgerd\\b|acidity|reflux|dyspeps|\\bapd\\b|\\bibs\\b|constipat|abdom|stomach|loose\\s*motion|diarr|vomit|nausea|h(?:a)?emorrhoid|piles|fissure|fistula|(?:oral|mouth)\\s*ulcer|liver|hepat|jaundice|appendic|hernia"},
+    {"name": "Skin / Hair", "exercise": "neutral",
+     "pattern": "eczema|dermat|tinea|t\\.\\s*corporis|xerosis|acne|pimple|scabies|melasma|urticari|\\bpmle\\b|\\bacd\\b|\\bsd\\b|impetigo|follicul|p\\.?\\s*alba|pityriasis|psoria|vitiligo|white\\s*spot|itch|fung|boil|furuncl|hair\\s*fall|hairfall|alopecia|telogen|onycho|kerato|intertrigo|crack\\s*heel|mil+i(?:a|ar|ria)|skin|wart|ringworm|rash|pigment"},
+    {"name": "Women's health", "exercise": "benefit",
+     "pattern": "\\bdub\\b|\\bpcos\\b|\\bpcod\\b|period|menstru|menorrh|amenorr|pregnan|\\bwks\\b|\\bpih\\b|vulvo|vagin|white\\s*discharge|leucorr|gyn|breast|antenatal|menopaus|fibroid"},
+    {"name": "Urinary / Sexual health", "exercise": "neutral",
+     "pattern": "\\buti\\b|urin|\\bsti\\b|\\bstd\\b|kidney|renal|\\bckd\\b|stone|calcul|prostat|\\bbph\\b|micturition|dysuria|erectile"},
+    {"name": "Weakness / Nutrition", "exercise": "benefit",
+     "pattern": "weakness|fatigue|tired|an(?:a)?emi|nutrition|vitamin|deficien|appetite|weight\\s*loss|malnut"},
+    {"name": "Injury / Wounds", "exercise": "avoid",
+     "pattern": "trauma|injur|abrasion|burn(?!ing)|wound|lacerat|fractur|\\bbite\\b|accident"},
+    {"name": "Eye / Dental", "exercise": "neutral",
+     "pattern": "\\beye\\b|conjunctiv|vision|cataract|teeth|tooth|dental|\\bgums?\\b|caries"}
+  ]
+}

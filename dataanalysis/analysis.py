@@ -16,6 +16,10 @@ from core.db import db_pool
 from core.llm_client import complete as llm_complete
 from core.config import flag, MAX_TOKENS
 from storage.ai_analysis_csv import get_llm_cache, set_llm_cache
+from lab_validation import (CATALOG as LAB_CATALOG, evaluate_against_reference as _evaluate_lab_status,
+                            extract_shorthand_labs,
+                            find_advised_tests, identify as identify_lab, is_new_test_row, parse_unit,
+                            parse_value, sex_from, validate_labs)
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +148,7 @@ def _parse_frequency(raw: str) -> str:
 # Structured clinical extraction from OCR lines
 # ============================================================
 
-def extract_clinical_summary_from_ocr(text_lines: list, visit_date: str = None) -> dict:
+def extract_clinical_summary_from_ocr(text_lines: list, visit_date: str = None, patient_sex: str = None) -> dict:
     """
     Parses OCR clean_text lines into a fully structured clinical summary.
     Returns dict with keys:
@@ -163,6 +167,7 @@ def extract_clinical_summary_from_ocr(text_lines: list, visit_date: str = None) 
         "vitals": [],
         "medications": [],
         "lab_results": [],
+        "tests_advised": [],
         "clinical_notes": [],
         "follow_up": None,
         "extraction_stats": {
@@ -244,7 +249,8 @@ def extract_clinical_summary_from_ocr(text_lines: list, visit_date: str = None) 
                 age_sex = f"{age_v} years / {sex_v}"
                 stats["extracted_fields"] += 1
                 continue
-            m2 = re.search(r'(?i)(?:age[:/\s-]+)?(\d{1,3})\s*(?:y|yrs?|years?)\s*[-/]\s*(male|female|m|f)\b', cl)
+            # "45 yrs/M", "45y - F", "29 Yrs. F", "29 years, female"
+            m2 = re.search(r'(?i)(?:age[:/\s-]+)?(\d{1,3})\s*(?:y|yrs?|years?)\.?\s*[-/,]?\s*(male|female|m|f)\b', cl)
             if m2:
                 age_v = m2.group(1)
                 sex_v = "Female" if m2.group(2).lower().startswith("f") else "Male"
@@ -296,11 +302,7 @@ def extract_clinical_summary_from_ocr(text_lines: list, visit_date: str = None) 
                 stats["extracted_fields"] += 1
             continue
 
-        # ------ Clinical Impression ------
-        # Tier 1: structural — ANY line explicitly labeled as an impression/
-        # assessment/dx, regardless of which disease it names. This is what
-        # lets the app recognise a diagnosis it has never seen before,
-        # instead of only ones in the hardcoded keyword list below.
+ 
         if impression is None:
             imp_label_match = re.search(
                 r'(?i)^\s*(?:\*\*)?(?:clinical\s+)?(?:impression|assessment|diagnosis|dx)\s*[:\-]\s*(?:\*\*)?(.+)',
@@ -343,11 +345,6 @@ def extract_clinical_summary_from_ocr(text_lines: list, visit_date: str = None) 
             r'\b([A-Z][A-Za-z\-]{2,24})\s+(\d+(?:\.\d+)?)\s*(mg|ml|mcg|gm|%|iu)\b', cl
         )
 
-        # A line shaped like a lab-report row (numeric reference range or a
-        # lab unit such as mg/dL, U/L, cells/cumm...) is never a medication
-        # row, even mid-table — this is what previously let lab components
-        # like Albumin/Urea/Creatinine/Direct/Indirect/Total/MCHC show up as
-        # "medications identified".
         row_is_lab = _looks_like_lab_row(cl) or (
             bare_med_match is not None and _is_lab_term(bare_med_match.group(1))
         )
@@ -385,10 +382,6 @@ def extract_clinical_summary_from_ocr(text_lines: list, visit_date: str = None) 
                 stats["extracted_fields"] += 1
                 continue
 
-            # Single-line med (not pipe delimited). Fires for ANY dosage-form
-            # prefixed line (med_header_match) — not just names on the
-            # hardcoded known-medicine list — so an unfamiliar medicine
-            # still gets a structured entry, not just a bare name pill.
             if known_med_match or med_header_match or bare_med_match:
                 flush_med()
                 if known_med_match:
@@ -479,9 +472,13 @@ def extract_clinical_summary_from_ocr(text_lines: list, visit_date: str = None) 
                 notes.append(note)
 
     # Populate lab results using comprehensive lab extractor
-    lab_results = extract_lab_results_from_text(text_lines)
+    # The patient's recorded sex first: every copy of one report then gets the same sex-specific reading, whether or
+    # not its own scan shows the sex; the document's age/sex line only when the patient record has none.
+    lab_results = extract_lab_results_from_text(text_lines, sex=patient_sex or sex_from(age_sex))
     if lab_results:
         stats["extracted_fields"] += len(lab_results)
+    # Tests listed under "Investigation advised" were ordered, not resulted.
+    tests_advised = find_advised_tests(text_lines)[1]
 
     # Deduplicate medications by name
     seen_med_names = {}
@@ -505,6 +502,7 @@ def extract_clinical_summary_from_ocr(text_lines: list, visit_date: str = None) 
         "vitals":               vitals,
         "medications":          deduped_meds,
         "lab_results":          lab_results,
+        "tests_advised":        tests_advised,
         "clinical_notes":       notes,
         "follow_up":            follow_up,
         "extraction_stats":     stats,
@@ -537,13 +535,6 @@ _MED_STOPWORDS = re.compile(
     r'advice|follow|review|refer)$', re.I
 )
 
-# Lab test / lab-report vocabulary. These are NOT medicines, but a lab report
-# rendered as a pipe-delimited or "name <value> <unit>" table looks
-# structurally identical to a medication table, which previously caused
-# things like "Albumin", "Urea", "Creatinine", "Direct", "Indirect", "Total"
-# and "MCHC" to be reported to the user as medications. Any candidate name
-# that is (or contains only) one of these terms is never treated as a
-# medicine, regardless of which pattern matched it.
 _LAB_TERMS = {
     "albumin", "globulin", "protein", "total protein", "bilirubin", "direct",
     "indirect", "total", "total bilirubin", "urea", "blood urea", "creatinine",
@@ -751,59 +742,16 @@ def get_possible_side_effects(medication_list, use_ai=True):
     return side_effects
 
 
-def _evaluate_lab_status(val_s, ref_s):
-    if not val_s or not ref_s:
-        return "Not Evaluated"
-    try:
-        value_match = re.search(r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?", str(val_s))
-        if not value_match:
-            return "Not Evaluated"
-        val_clean = float(value_match.group(0).replace(",", ""))
-        ref_str = str(ref_s).strip()
-
-        range_m = re.search(r'([\d.]+)\s*[-–—]\s*([\d.]+)', ref_str)
-        if range_m:
-            rmin, rmax = float(range_m.group(1)), float(range_m.group(2))
-            if val_clean < rmin:
-                return "Abnormal (Low)"
-            elif val_clean > rmax:
-                return "Abnormal (High)"
-            else:
-                return "Normal"
-
-        lt_m = re.search(r'[<≤]\s*=?\s*([\d.]+)', ref_str)
-        if lt_m:
-            limit = float(lt_m.group(1))
-            return "Normal" if val_clean <= limit else "Abnormal (High)"
-
-        gt_m = re.search(r'[>≥]\s*=?\s*([\d.]+)', ref_str)
-        if gt_m:
-            limit = float(gt_m.group(1))
-            return "Normal" if val_clean >= limit else "Abnormal (Low)"
-
-        status_word = re.search(r"\b(normal|high|elevated|low|decreased|abnormal)\b", ref_str, re.I)
-        if status_word:
-            status = status_word.group(1).casefold()
-            if status == "normal":
-                return "Normal"
-            if status in {"high", "elevated"}:
-                return "Abnormal (High)"
-            if status in {"low", "decreased"}:
-                return "Abnormal (Low)"
-            return "Abnormal"
-
-    except Exception as exc:
-        logger.warning("Unable to evaluate lab status for value %r: %s", val_s, exc)
-    return "Not Evaluated"
-
-
-def extract_lab_results_from_text(text_lines):
+def extract_lab_results_from_text(text_lines, sex=None):
+    """Lab results in a document, each checked by lab_validation (identity, plausibility, ranges, critical)."""
     raw_lines = _normalize_text_input(text_lines)
     if not raw_lines:
         return []
 
     results = []
     seen_tests = set()
+    # "Investigation advised" lists name tests that were ordered; their lines hold no results.
+    advised_lines, _ = find_advised_tests(raw_lines)
 
     def add_result(tname, val, ref):
         tname = re.sub(r'[*`|_]+', '', tname).strip(' :|*,')
@@ -816,8 +764,6 @@ def extract_lab_results_from_text(text_lines):
                 r'(?i)^(?:non[\s-]?diabetic|at\s+risk|pre-?diabet|diagnosing|diabetic|reference|desirable|'
                 r'borderline|optimal|near\s+optimal|very\s+high|high\s+risk|good\s+control|poor\s+control)', tname):
             return
-        if not ref and re.search(r'(?i)hba1c|glycosylated|glycated', tname):
-            ref = "< 5.7 (ADA reference)"
         key = (tname.lower(), val)
         if key in seen_tests:
             return
@@ -831,9 +777,9 @@ def extract_lab_results_from_text(text_lines):
         })
 
     # Pass 1: Line-by-line parsing
-    for line in raw_lines:
+    for line_no, line in enumerate(raw_lines):
         cl = line.strip()
-        if not cl:
+        if not cl or line_no in advised_lines:
             continue
 
         if '|' in cl:
@@ -851,6 +797,12 @@ def extract_lab_results_from_text(text_lines):
                 if t_candidate and val_found:
                     add_result(t_candidate, val_found, ref_found)
                     continue
+                # Qualitative result row ("DENGUE NS1 | NEGATIVE |") for a test the catalog knows.
+                if t_candidate and identify_lab(t_candidate) and re.fullmatch(
+                        r'(?i)(?:non[\s-]?reactive|reactive|negative|positive|not\s+detected|detected|nil|absent|present)',
+                        parts[1]):
+                    add_result(t_candidate, parts[1], "")
+                    continue
 
         hba1c_m = re.search(r'(?i)\b(HbA1C|HbA1c)\s+([\d.]+)\s*%\s*(?:Non-Diabetic\s*:?\s*)?([<>≤≥]?\s*[\d.]+)', cl)
         if hba1c_m:
@@ -866,7 +818,7 @@ def extract_lab_results_from_text(text_lines):
             continue
 
         direct_m = re.search(
-            r'(?i)^\s*([A-Za-z0-9\s(),\/\-\"\']+?)\s+(?:Sample\s+Type:[^:]*)?(?:Method:[^:]*)?\s*([\d.]+)\s*(?:mg/dL|g/dL|U/L|mmol/L|gm/dl|Millions/Cumm|fL|Pg|Cells/Cumm|Lakhs/Cumm|%|g/dl)?\s+([<>≤≥]?\s*\d+(?:\.\d+)?(?:\s*[-–—]\s*\d+(?:\.\d+)?)?)',
+            r'(?i)^\s*([A-Za-z0-9\s(),\/\-\"\']+?)\s+(?:Sample\s+Type:[^:]*?)?(?:Method:[^:]*?)?\s*(?<![\d.])(\d+(?:\.\d+)?)\s*(?:mg/dL|g/dL|U/L|mmol/L|gm/dl|Millions/Cumm|fL|Pg|Cells/Cumm|Lakhs/Cumm|%|g/dl)?\s+([<>≤≥]?\s*\d+(?:\.\d+)?(?:\s*[-–—]\s*\d+(?:\.\d+)?)?)',
             cl
         )
         if direct_m:
@@ -886,19 +838,42 @@ def extract_lab_results_from_text(text_lines):
         "serum creatinine", "hemoglobin", "total rbc count", "platelet count"
     )
 
+    def name_only(line):
+        """A line holding just a catalog test name ("RBC COUNT", "HCT"): one column of a vertical report layout.
+        Panels ("CBC") and qualitative tests have no single numeric value below them."""
+        text = line.strip(' :*|')
+        key = identify_lab(text) if 0 < len(text) <= 40 else None
+        spec = LAB_CATALOG.get(key) or {}
+        return (bool(spec) and not spec.get("panel") and not spec.get("qualitative")
+                and not re.search(r'(?<![a-z])\d+(?:\.\d+)?(?![a-z0-9])', text.casefold()))
+
+    range_line = re.compile(r'^\s*[<>≤≥]?\s*\d+(?:\.\d+)?\s*[-–—]\s*\d+(?:\.\d+)?')
+    # Dates and times ("7th June 2019 1:01 PM") are never a result.
+    date_line = re.compile(r'(?i)\d(?:st|nd|rd|th)\b|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b|\d{1,2}:\d{2}')
     for i in range(n):
+        if i in advised_lines:
+            continue
         l_lower = raw_lines[i].lower().strip(' :*')
         matched_kw = next((kw for kw in test_keywords if kw in l_lower), None)
-        if matched_kw:
+        if matched_kw or name_only(raw_lines[i]):
             test_name = raw_lines[i].strip(' :*')
             val = None
             ref = ""
             for j in range(i + 1, min(i + 7, n)):
                 line_j = raw_lines[j].strip()
-                if not val:
+                # The next test's row (often "8. Serum Sodium") starts with its serial number: never this test's value.
+                if (j in advised_lines or is_new_test_row(line_j) or any(kw in line_j.lower() for kw in test_keywords)
+                        or name_only(line_j)):
+                    break
+                # A reference range ("12 - 16") is never the value: a test printed without a result has none.
+                if not val and not range_line.match(line_j) and not date_line.search(line_j):
                     val_m = re.search(r'(?:Result\s*:?\s*)?^:?\s*([<>≤≥]?\s*\d+(?:\.\d+)?)', line_j, re.I)
                     if val_m and not re.search(r'^(?:19|20)\d\d', line_j):
                         val = val_m.group(1).strip()
+                        # A unit printed on its own line under the value ("Millions/cumm").
+                        unit_text = line_j[val_m.end():].strip() or (raw_lines[j + 1].strip() if j + 1 < n else "")
+                        if parse_unit(unit_text) not in (None, "?") and not range_line.match(unit_text):
+                            val = f"{val} {unit_text.split()[0]}"
 
                 if not ref:
                     ref_m = re.search(r'(?:Bio\.?\s*Ref\.?\s*Interval\s*:?\s*)?([<>≤≥]?\s*\d+(?:\.\d+)?\s*[-–—]\s*\d+(?:\.\d+)?|[<>≤≥]\s*[\d.]+)', line_j, re.I)
@@ -908,7 +883,15 @@ def extract_lab_results_from_text(text_lines):
             if test_name and val:
                 add_result(test_name, val, ref)
 
-    return results
+    # Pass 3: shorthand results in notes ("TSH -0.4", "Hb:6.5 gm/dl", "HIV-NR"), for tests not already found.
+    found = {(identify_lab(r["test_name"]), parse_value(r["value"])[1]) for r in results}
+    for item in extract_shorthand_labs(raw_lines, skip=advised_lines):
+        key = (identify_lab(item["test_name"]), parse_value(item["value"])[1])
+        if key not in found:
+            found.add(key)
+            results.append(item)
+
+    return validate_labs(results, sex=sex)
 
 
 # ============================================================
@@ -1047,6 +1030,10 @@ def _augment_with_ai_if_gaps(doc_lines, clinical_summary, patient_id=None):
         if not clinical_summary.get(field) and extracted.get(field):
             clinical_summary[field] = extracted[field][:limit]
             ai_fields.append(field)
+    if "lab_results" in ai_fields:
+        # AI-read values get the same identity, plausibility, range and critical checks as regex ones.
+        clinical_summary["lab_results"] = validate_labs(clinical_summary["lab_results"],
+                                                        sex=sex_from(clinical_summary.get("age_sex")))
     current_meds = {str(item.get("name", "")).casefold() for item in clinical_summary.get("medications", []) if isinstance(item, dict)}
     for item in extracted.get("medications", [])[:20]:
         name = str(item.get("name") or "").strip()
@@ -1068,6 +1055,23 @@ def _augment_with_ai_if_gaps(doc_lines, clinical_summary, patient_id=None):
 # Main data fetch
 # ============================================================
 
+def format_age_sex(age_years, sex):
+    """'45 years / Female' from the patient table's age_years and sex; None when both are missing."""
+    sex_text = {"m": "Male", "f": "Female"}.get(str(sex or "").strip().lower(), str(sex or "").strip().title())
+    parts = [f"{age_years} years" if age_years is not None else "", sex_text]
+    return " / ".join(p for p in parts if p) or None
+
+
+def health_history_present(history):
+    """Items of patient.health_history_json marked present: [{"item": "Diabetes", "detail": "since 2019"}]."""
+    rows = []
+    for key, value in (history or {}).items():
+        if isinstance(value, dict) and str(value.get("present")).strip().lower() in ("true", "yes", "1"):
+            detail = str(value.get("notes") or value.get("qty") or "").strip()
+            rows.append({"item": key.replace("_", " ").capitalize(), "detail": detail})
+    return rows
+
+
 def fetch_patient_history(patient_id):
     """
     """
@@ -1084,6 +1088,7 @@ def fetch_patient_history(patient_id):
                     v.created_at,
                     v.chief_complaint,
                     v.vitals_json,
+                    v.assigned_doctor_user_id::text AS doctor_id,
 
                     COALESCE(d.documents, '[]'::jsonb) AS documents,
                     COALESCE(p.prescriptions, '[]'::jsonb) AS prescriptions
@@ -1110,6 +1115,15 @@ def fetch_patient_history(patient_id):
                             'confirmed_diagnosis', pe.confirmed_diagnosis,
                             'instructions', pe.instructions,
                             'patient_instructions', pe.patient_instructions,
+                            'is_emergency', pe.is_emergency,
+                            'is_referral_recommended', pe.is_referral_recommended,
+                            'referral_specialist_name', pe.referral_specialist_name,
+                            'referral_treatment_name', pe.referral_treatment_name,
+                            -- Prescriber's specialization only: no name, id or qualification is read.
+                            'prescriber_specialization', (
+                                SELECT NULLIF(trim(u.specialization), '')
+                                FROM "user" u WHERE u.id = pe.doctor_user_id
+                            ),
                             'medications', COALESCE(m.medications, '[]'::jsonb),
                             'followups', COALESCE(f.followups, '[]'::jsonb)
                         )
@@ -1158,10 +1172,28 @@ def fetch_patient_history(patient_id):
                 (patient_id,),
             )
             rows = cur.fetchall()
+            cur.execute("SELECT age_years, sex, health_history_json FROM patient WHERE id = %s::uuid", (patient_id,))
+            demographics = cur.fetchone() or (None, None, None)
+            patient_sex = sex_from(demographics[1])
+            cur.execute(
+                """
+                SELECT ltc.name, pc.severity, pc.status, pc.diagnosed_at
+                FROM patient_condition pc
+                JOIN long_term_condition ltc ON pc.long_term_condition_id = ltc.id
+                WHERE pc.patient_id = %s::uuid AND pc.deleted_at IS NULL
+                ORDER BY ltc.name
+                """,
+                (patient_id,),
+            )
+            long_term_conditions = [
+                {"name": name, "severity": severity, "status": status,
+                 "diagnosed_at": str(diagnosed_at)[:10] if diagnosed_at else None}
+                for name, severity, status, diagnosed_at in cur.fetchall()
+            ]
 
         visits = {}
 
-        for (pid, vid, created_at, chief_complaint, vitals_json,
+        for (pid, vid, created_at, chief_complaint, vitals_json, doctor_id,
              documents_jsonb, prescriptions_jsonb) in rows:
 
             visit_id = str(vid)
@@ -1172,15 +1204,25 @@ def fetch_patient_history(patient_id):
             medications = []
             seen_prescriptions = set()
             prov_dx = conf_dx = None
+            is_emergency = is_referral = False
+            referral_specialist = referral_treatment = None
             followups = []
             seen_followup_keys = set()
+            specializations = []
 
             for pe in (prescriptions_jsonb or []):
                 prescription_id = pe.get("prescription_id")
+                specialization = (pe.get("prescriber_specialization") or "").strip() or None
+                if specialization and specialization not in specializations:
+                    specializations.append(specialization)
                 if prescription_id not in seen_prescriptions:
                     seen_prescriptions.add(prescription_id)
                     prov_dx = prov_dx or pe.get("provisional_diagnosis")
                     conf_dx = conf_dx or pe.get("confirmed_diagnosis")
+                    is_emergency = is_emergency or bool(pe.get("is_emergency"))
+                    is_referral = is_referral or bool(pe.get("is_referral_recommended"))
+                    referral_specialist = referral_specialist or (pe.get("referral_specialist_name") or "").strip() or None
+                    referral_treatment = referral_treatment or (pe.get("referral_treatment_name") or "").strip() or None
                     for rx in (pe.get("instructions"), pe.get("patient_instructions")):
                         if rx:
                             s = normalize_medical_text(rx)
@@ -1215,6 +1257,7 @@ def fetch_patient_history(patient_id):
                                 "frequency": med.get("frequency"),
                                 "duration":  med.get("duration"),
                                 "source":    "Prescription (database)",
+                                "prescriber_specialization": specialization,
                             })
 
             # ---- build documents dict from aggregated documents ----
@@ -1233,12 +1276,18 @@ def fetch_patient_history(patient_id):
 
             visits[visit_id] = {
                 "visit_id":              visit_id,
+                "doctor_id":             doctor_id,
                 "visit_date":            created_at.isoformat() if created_at else None,
                 "chief_complaint":       chief_complaint,
                 "provisional_diagnosis": prov_dx,
                 "confirmed_diagnosis":   conf_dx,
+                "is_emergency":          is_emergency,
+                "is_referral_recommended":  is_referral,
+                "referral_specialist_name": referral_specialist,
+                "referral_treatment_name":  referral_treatment,
                 "medications":           medications,
                 "rx_items":              rx_items,
+                "prescriber_specializations": specializations,
                 "vitals":                vitals_json,
                 "documents":             documents,
                 "followups":             followups,
@@ -1272,21 +1321,9 @@ def fetch_patient_history(patient_id):
                     doc_lines = doc["lines"]
 
                     clinical_summary = extract_clinical_summary_from_ocr(
-                        doc_lines, visit_date=v["visit_date"]
+                        doc_lines, visit_date=v["visit_date"], patient_sex=patient_sex
                     )
-                    # If structural regex parsing came up empty-handed for
-                    # diagnosis/medications despite real text being present,
-                    # fall back to an AI-assisted pass instead of just
-                    # giving up on anything not in the hardcoded lists.
-                    # Keep record fetch deterministic; AI enrichment is
-                    # triggered explicitly from the relevant UI action.
-
-                    # clinical_summary["lab_results"] already IS the regex
-                    # extraction, plus anything Tier 2 above backfilled for
-                    # an unfamiliar document layout — reuse it rather than
-                    # recomputing a fresh regex-only pass that would throw
-                    # the AI-assisted labs away.
-                    doc_labs = clinical_summary.get("lab_results") or extract_lab_results_from_text(doc_lines)
+                    doc_labs = clinical_summary.get("lab_results") or extract_lab_results_from_text(doc_lines, sex=patient_sex)
                     doc_meds = extract_medications_from_text(doc_lines)
                     for med in clinical_summary.get("medications", []):
                         if med.get("name"):
@@ -1294,7 +1331,10 @@ def fetch_patient_history(patient_id):
                     doc_meds = sorted(set(doc_meds))
 
                     visit_doc_meds.update(doc_meds)
-                    visit_labs.extend(doc_labs)
+                    # The same scan is sometimes uploaded twice: one row per identical result in a visit.
+                    seen_labs = {(l.get("analyte") or l.get("test_name"), l.get("value"), l.get("reference")) for l in visit_labs}
+                    visit_labs.extend(l for l in doc_labs
+                                      if (l.get("analyte") or l.get("test_name"), l.get("value"), l.get("reference")) not in seen_labs)
 
                     documents_formatted.append({
                         "document_label":    f"Document {doc_num}",
@@ -1322,19 +1362,21 @@ def fetch_patient_history(patient_id):
 
                     for ocr_vital in clinical_summary["vitals"]:
                         label_lower = ocr_vital["label"].lower().replace("₂", "2")
+                        ocr_text = ocr_vital["value"].split()[0]
+                        ocr_numbers = [float(n) for n in re.findall(r"\d+(?:\.\d+)?", ocr_text)]
+                        # One comparison per vital, against the structured value of the same shape:
+                        # "bp" 131/75 for a 181/75 reading, not its bp_sys / bp_dia parts as well.
                         for db_key, db_val in db_vitals_json.items():
-                            if any(kw in db_key.lower() for kw in label_lower.split()):
-                                try:
-                                    db_numeric = float(re.sub(r'[^\d.]', '', str(db_val)))
-                                    ocr_numeric = float(re.sub(r'[^\d.]', '', ocr_vital["value"].split()[0]))
-                                    if abs(db_numeric - ocr_numeric) > 2:
-                                        ocr_vital["source"] = "Document"
-                                        discrepancies.append(
-                                            f"{documents_formatted[-1]['document_label']}: {ocr_vital['label']} — "
-                                            f"structured record shows {db_val}, document shows {ocr_vital['value'].split()[0]}."
-                                        )
-                                except Exception as exc:
-                                    logger.warning("Unable to compare structured and OCR vital values: %s", exc)
+                            db_numbers = [float(n) for n in re.findall(r"\d+(?:\.\d+)?", str(db_val))]
+                            if (any(kw in db_key.lower() for kw in label_lower.split())
+                                    and ocr_numbers and len(db_numbers) == len(ocr_numbers)):
+                                if any(abs(a - b) > 2 for a, b in zip(db_numbers, ocr_numbers)):
+                                    ocr_vital["source"] = "Document"
+                                    discrepancies.append(
+                                        f"{documents_formatted[-1]['document_label']}: {ocr_vital['label']} — "
+                                        f"structured record shows {db_val}, document shows {ocr_text}."
+                                    )
+                                break
 
             # Database medicines come ONLY from prescriptionitem; prescription
             # instruction text is no longer mined for medicine names.
@@ -1348,6 +1390,7 @@ def fetch_patient_history(patient_id):
             formatted.append({
                 "visit_id":             v["visit_id"],
                 "visit_date":           v["visit_date"],
+                "doctor_id":            v["doctor_id"],
                 "chief_complaint":      v["chief_complaint"] or (documents_formatted[0]["clinical_summary"].get("chief_complaint") if documents_formatted else None),
                 "provisional_diagnosis": v["provisional_diagnosis"] or (documents_formatted[0]["clinical_summary"].get("provisional_diagnosis") or documents_formatted[0]["clinical_summary"].get("clinical_impression") if documents_formatted else None),
                 "confirmed_diagnosis":  v["confirmed_diagnosis"] or (documents_formatted[0]["clinical_summary"].get("confirmed_diagnosis") if documents_formatted else None),
@@ -1360,11 +1403,17 @@ def fetch_patient_history(patient_id):
                 "has_document":         has_document,
                 "documents":            documents_formatted,
                 "db_medications":       v["rx_items"],
+                # Specializations of the doctors who wrote this visit's prescriptions (no personal details).
+                "prescriber_specializations": v.get("prescriber_specializations") or [],
                 "document_medications": sorted(visit_doc_meds),
                 "medications_found":    sorted(set(visit_db_meds) | visit_doc_meds),
                 "lab_results":          visit_labs,
                 "discrepancies":        discrepancies,
                 "followups":            v.get("followups", []),
+                "is_emergency":         v["is_emergency"],
+                "is_referral_recommended":  v["is_referral_recommended"],
+                "referral_specialist_name": v["referral_specialist_name"],
+                "referral_treatment_name":  v["referral_treatment_name"],
             })
 
         # Documents that carry this patient_id but no visit_id. They are
@@ -1386,14 +1435,30 @@ def fetch_patient_history(patient_id):
             ))
             if not lines:
                 continue
-            doc = _build_document(f"Unlinked Document {doc_num}", doc_id, lines)
+            doc = _build_document(f"Unlinked Document {doc_num}", doc_id, lines, patient_sex=patient_sex)
             doc["likely_visit"], doc["candidate_visits"] = _match_unlinked_document(doc, formatted)
             all_meds.update(doc["medications_found"])
             all_doc_meds.update(doc["medications_found"])
             unlinked_documents.append(doc)
 
+        # One name per prescriber specialty ('Orthopaedics' / 'Orthopedic' -> the record's usual spelling).
+        from core.encounters import unify_specializations
+        unify_specializations(formatted)
+
+        age_years, sex, health_history = demographics
+        if isinstance(health_history, str):
+            try:
+                health_history = json.loads(health_history)
+            except ValueError:
+                health_history = None
         return {
             "patient_id":       str(patient_id),
+            "age_years":        age_years,
+            "sex":              sex,
+            "age_sex":          format_age_sex(age_years, sex),
+            "health_history":   health_history if isinstance(health_history, dict) else {},
+            "health_history_present": health_history_present(health_history if isinstance(health_history, dict) else {}),
+            "long_term_conditions": long_term_conditions,
             "total_visits":     len(formatted),
             "visits":           formatted,
             "unlinked_documents": unlinked_documents,
@@ -1407,9 +1472,9 @@ def fetch_patient_history(patient_id):
         db_pool.putconn(conn)
 
 
-def _build_document(label, doc_id, doc_lines, visit_date=None):
+def _build_document(label, doc_id, doc_lines, visit_date=None, patient_sex=None):
     """Deterministic extraction for one document, same shape as visit documents."""
-    clinical_summary = extract_clinical_summary_from_ocr(doc_lines, visit_date=visit_date)
+    clinical_summary = extract_clinical_summary_from_ocr(doc_lines, visit_date=visit_date, patient_sex=patient_sex)
     doc_meds = extract_medications_from_text(doc_lines)
     doc_meds.extend(m["name"] for m in clinical_summary.get("medications", []) if m.get("name"))
     return {
@@ -1557,43 +1622,61 @@ def _match_unlinked_document(doc, visits):
     return None, []
 
 
+# vitals_json key -> (label, unit). Exact keys, in display order; older key spellings map to the same label.
+_VITAL_KEYS = {
+    "bp":                     ("BP", "mmHg"),
+    "blood_pressure":         ("BP", "mmHg"),
+    "pulse":                  ("Pulse", "bpm"),
+    "heart_rate":             ("Heart Rate", "bpm"),
+    "spo2":                   ("SpO₂", "%"),
+    "temp_f":                 ("Temperature", "°F"),
+    "temp_c":                 ("Temperature", "°C"),
+    "temp":                   ("Temperature", ""),
+    "temperature":            ("Temperature", ""),
+    "rr":                     ("Respiratory Rate", "/min"),
+    "sugar_mg_dl":            ("Sugar", "mg/dL"),
+    "fasting_sugar_mg_dl":    ("Fasting Sugar", "mg/dL"),
+    "nonfasting_sugar_mg_dl": ("Non-fasting Sugar", "mg/dL"),
+    "hb":                     ("Hb", "g/dL"),
+    "weight_kg":              ("Weight", "kg"),
+    "weight":                 ("Weight", "kg"),
+    "height_cm":              ("Height", "cm"),
+    "height":                 ("Height", "cm"),
+    "bmi":                    ("BMI", "kg/m²"),
+}
+
+
+def _vital_text(raw_val) -> str:
+    """Stored value as display text; '' for an empty one. 113.0 -> '113'."""
+    if raw_val is None or isinstance(raw_val, bool):
+        return ""
+    if isinstance(raw_val, float):
+        return f"{raw_val:g}"
+    text = str(raw_val).strip()
+    return "" if text.lower() in ("none", "null", "nan") else text
+
+
 def _parse_vitals_json(vitals_json: dict, visit_date: str) -> list:
-    """Convert structured DB vitals_json into a list of vital rows."""
+    """Convert structured DB vitals_json into a list of vital rows; empty values are left out."""
     if not vitals_json:
         return []
     date_str = visit_date[:10] if (visit_date and len(visit_date) >= 10) else "Not recorded"
-    rows = []
-    label_map = {
-        "spo2":        ("SpO₂",       lambda v: f"{v}%"),
-        "pulse":       ("Pulse",      lambda v: f"{v} bpm"),
-        "heart_rate":  ("Heart Rate", lambda v: f"{v} bpm"),
-        "bp":          ("BP",         lambda v: f"{v} mmHg"),
-        "blood_pressure": ("BP",      lambda v: f"{v} mmHg"),
-        "weight":      ("Weight",     lambda v: f"{v} kg"),
-        "weight_kg":   ("Weight",     lambda v: f"{v} kg"),
-        "height":      ("Height",     lambda v: f"{v} cm"),
-        "height_cm":   ("Height",     lambda v: f"{v} cm"),
-        "temp":        ("Temperature", lambda v: f"{v}"),
-        "temperature": ("Temperature", lambda v: f"{v}"),
-        "rr":          ("Respiratory Rate", lambda v: f"{v} /min"),
-    }
-    seen = set()
-    for raw_key, raw_val in vitals_json.items():
-        key_lower = raw_key.lower().replace(" ", "_")
-        for k, (label, fmt) in label_map.items():
-            if k in key_lower and label not in seen:
-                try:
-                    display_val = fmt(raw_val)
-                except Exception:
-                    display_val = str(raw_val)
-                rows.append({
-                    "label":  label,
-                    "value":  display_val,
-                    "date":   date_str,
-                    "source": "Structured record",
-                })
-                seen.add(label)
-                break
+    values = {str(k).lower().replace(" ", "_"): _vital_text(v) for k, v in vitals_json.items()}
+    # bp_sys / bp_dia are the parts of "bp": shown as BP only when "bp" itself is empty.
+    if not values.get("bp") and values.get("bp_sys") and values.get("bp_dia"):
+        values["bp"] = f"{values['bp_sys']}/{values['bp_dia']}"
+    rows, seen = [], set()
+    for key, (label, unit) in _VITAL_KEYS.items():
+        text = values.get(key)
+        if not text or label in seen:
+            continue
+        rows.append({
+            "label":  label,
+            "value":  f"{text}%" if unit == "%" else f"{text} {unit}".strip(),
+            "date":   date_str,
+            "source": "Structured record",
+        })
+        seen.add(label)
     return rows
 
 

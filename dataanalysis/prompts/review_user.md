@@ -1,3 +1,3 @@
-Return only the required four-section Markdown review. End with this exact line: {required_ending}
-LONGITUDINAL PATIENT FACTS (JSON):
+Write the Clinical Insights for this patient. End with this exact line: {required_ending}
+PATIENT EVIDENCE (JSON):
 {context}{feedback}

@@ -4,6 +4,7 @@ Runs the real answer_patient_question pipeline with the LLM, answer cache and Ne
 then checks the evidence it returns (what the LLM would see) against each case's expectations.
 
     python -m evals.retrieval_eval            # from dataanalysis/: per-case table + overall score
+    python -m evals.retrieval_eval --full     # same, with ENABLE_FULL_RECORD_CONTEXT on
 
 Expectations were written from the clinical intent of each question, not from current output,
 so a failing case is a real retrieval gap rather than a broken test.
@@ -253,7 +254,7 @@ HARD_CASES = [
     Case("hard-metformin-reduced", CHRONIC, "Why was the metformin dose reduced?", ["egfr has fallen to 35"]),
     Case("hard-changes-after-8", CHRONIC, "What medicines were changed after visit 8?", ["glargine", "500mg"]),
     Case("hard-potassium-v7", CHRONIC, "What was the potassium in visit 7?", ["6.2"]),
-    Case("hard-insulin-start", CHRONIC, "When was insulin started?", ["glargine", "encounter #9"]),
+    Case("hard-insulin-start", CHRONIC, "When was insulin started?", ["glargine", "visit #9"]),
     Case("hard-foot-ulcer", CHRONIC, "What does the foot ulcer note say?", ["great toe"]),
     Case("hard-kidney-labs", CHRONIC, "What do the kidney function tests indicate?", ["egfr", "creatinine"]),
     Case("hard-ramipril-dose", CHRONIC, "Was the ramipril dose changed?", ["5mg"]),
@@ -263,7 +264,18 @@ HARD_CASES = [
     Case("hard-potassium-after-7", CHRONIC, "What was the potassium after visit 7?", ["4.9"]),
 ]
 
-CASES = CASES + HARD_CASES
+# Wording that doesn't match the record: lay terms, OCR-style misspellings, Hinglish.
+# These are where keyword retrieval is weakest, so they show what full-record context buys.
+PARAPHRASE_CASES = [
+    Case("para-sugar-control", DIABETIC, "How is the patient's sugar control?", ["8.4", "6.9"]),
+    Case("para-typo-metformin", DIABETIC, "What dose of metfromin is the patient on?", ["1000mg"]),
+    Case("para-kidneys", THYROID_CKD, "How are the kidneys doing?", ["2.0 mg/dl"]),
+    Case("para-thyroid-better", THYROID_CKD, "Is the thyroid getting better with treatment?", ["3.1", "75mcg"]),
+    Case("para-last-bp", CHRONIC, "Was blood pressure controlled at the last visit?", ["136/85"]),
+    Case("para-hinglish-potassium", CHRONIC, "potassium kab high tha?", ["6.2"]),
+]
+
+CASES = CASES + HARD_CASES + PARAPHRASE_CASES
 
 
 @dataclass
@@ -304,13 +316,16 @@ def run_case(case):
         case.patient, case.patient["patient_id"], case.question, history=case.history, meta=meta)
     text = "\n".join(str(item.get("content", "")) for item in evidence or []).casefold()
     found = [e for e in case.expect if e.casefold() in text]
-    return Result(case, meta.get("path") or meta.get("rule") or "?", found,
+    path = meta.get("path") or meta.get("rule") or "?"
+    if meta.get("context_mode") == "full":
+        path += "+full"
+    return Result(case, path, found,
                   [e for e in case.expect if e not in found],
                   [f for f in case.forbid if f.casefold() in text], len(evidence or []))
 
 
-def run_eval(cases=CASES):
-    with _stubs():
+def run_eval(cases=CASES, full_record=False):
+    with _stubs(), mock.patch.dict("os.environ", {"ENABLE_FULL_RECORD_CONTEXT": "true" if full_record else "false"}):
         return [run_case(case) for case in cases]
 
 
@@ -324,13 +339,14 @@ def summary(results):
 
 
 def main():
-    results = run_eval()
-    print(f"{'case':<24} {'path':<14} {'recall':>6}  {'ev':>2}  problems")
+    import sys
+    results = run_eval(full_record="--full" in sys.argv)
+    print(f"{'case':<24} {'path':<18} {'recall':>6}  {'ev':>2}  problems")
     for r in results:
         problems = "; ".join(filter(None, (
             f"missing {r.missing}" if r.missing else "",
             f"forbidden {r.forbidden_hits}" if r.forbidden_hits else "")))
-        print(f"{r.case.id:<24} {r.path:<14} {r.recall:>6.0%}  {r.n_evidence:>2}  {problems or 'ok'}")
+        print(f"{r.case.id:<24} {r.path:<18} {r.recall:>6.0%}  {r.n_evidence:>2}  {problems or 'ok'}")
     s = summary(results)
     print(f"\npassed {s['passed']}/{s['total']}  mean recall {s['mean_recall']:.0%}  forbidden hits {s['forbidden_hits']}")
 

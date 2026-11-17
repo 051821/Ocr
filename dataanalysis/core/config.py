@@ -37,7 +37,9 @@ APPROVED_MODELS = tuple(dict.fromkeys(
     tuple(m for m in _RAW_DEFAULT_MODELS if not m.endswith(":free")) + (CHAT_MODEL,)
 ))
 
-MAX_TOKENS = {"review": 600, "chat": 400, "extraction": 300, "side_effects": 300}
+MAX_TOKENS = {"review": 600, "chat": 400, "extraction": 300, "side_effects": 300,
+              "terms": 4000, "review_check": 1200,
+              "review_quick": 500}
 
 if flag("ENABLE_PROMPT_INJECTION_SANDBOX"):
     MAX_TOKENS = {**MAX_TOKENS, "extraction": 900}

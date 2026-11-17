@@ -1,46 +1,145 @@
 {
   "_doc": "Extensible condition registry. Add entries here to support new conditions without code changes.",
-
   "condition_map": [
-    {"pattern": "\\bt2dm\\b|\\bt2\\s*dm\\b|\\bdm\\b|diabet|\\bniddm\\b", "name": "Type 2 diabetes mellitus"},
-    {"pattern": "\\bhtn\\b|\\bhtb\\b|hypertens", "name": "Hypertension"},
-    {"pattern": "\\bgerd\\b|acidity|reflux|gastritis", "name": "GERD / acidity"},
-    {"pattern": "cervical|\\bneck\\b", "name": "Cervical (neck) pain / spondylosis"},
-    {"pattern": "low(?:er)?\\s*back|lumbar|back\\s*(?:ache|pain)", "name": "Low back pain"},
-    {"pattern": "shoulder|joint|knee|\\bhip\\b", "name": "Joint pain (shoulder / knee / hip)"},
-    {"pattern": "asthma|\\bcopd\\b|bronchial\\s*asthma|chronic\\s*obstruct", "name": "Asthma / COPD"},
-    {"pattern": "thyroid|hypothyr|hyperthyr", "name": "Thyroid disorder"},
-    {"pattern": "epilep|seizur|convuls", "name": "Epilepsy"},
-    {"pattern": "depress|\\bmdd\\b|anxiety|\\bgad\\b", "name": "Depression / anxiety"},
-    {"pattern": "anemi|anaemi", "name": "Anaemia"},
-    {"pattern": "\\bckd\\b|chronic\\s*kidney|renal\\s*(?:failure|insufficiency)", "name": "Chronic kidney disease"},
-    {"pattern": "heart\\s*failure|\\bhf\\b|cardiomyop", "name": "Heart failure"},
-    {"pattern": "\\bcad\\b|coronar|ischem|angina|\\bihd\\b", "name": "Coronary artery disease"},
-    {"pattern": "\\bra\\b|rheumat(?:oid)?\\s*arthr", "name": "Rheumatoid arthritis"},
-    {"pattern": "eczema|\\blsc\\b|dermatit|psoriasis|urticari|folliculit|scabies", "name": "Skin condition"},
-    {"pattern": "migrain|chronic\\s*headache", "name": "Migraine"},
-    {"pattern": "\\bpcos\\b|polycyst", "name": "PCOS"},
-    {"pattern": "liver|hepat|cirr|\\bnafld\\b|\\bnash\\b", "name": "Liver disease"},
-    {"pattern": "\\buti\\b|urinary\\s*tract\\s*infect", "name": "Urinary tract infection"},
-    {"pattern": "pneumonia|\\bcap\\b|\\bhap\\b|lower\\s*resp", "name": "Pneumonia"},
-    {"pattern": "tubercul|\\btb\\b", "name": "Tuberculosis"},
-    {"pattern": "\\bsle\\b|lupus", "name": "SLE (Lupus)"},
-    {"pattern": "osteopor|bone\\s*density", "name": "Osteoporosis"},
-    {"pattern": "gout|hyperuric", "name": "Gout"},
-    {"pattern": "\\bbph\\b|benign\\s*prost|prostat", "name": "BPH / Prostate"},
-    {"pattern": "dyslipid|hyperlipid|hypercholesterol", "name": "Dyslipidaemia"},
-    {"pattern": "dysmenorrh|menstrual\\s*(?:pain|disorder|irregul)", "name": "Dysmenorrhoea"},
-    {"pattern": "herpes\\s*zost|shingles", "name": "Herpes zoster"},
-    {"pattern": "dengue|malaria|typhoid|enteric\\s*fever", "name": "Tropical infection"},
-    {"pattern": "obesity|\\bbmi\\b.*(?:30|obese)", "name": "Obesity"}
+    {
+      "pattern": "\\bt2dm\\b|\\bt2\\s*dm\\b|\\bdm\\b|diabet|\\bniddm\\b",
+      "name": "Type 2 diabetes mellitus"
+    },
+    {
+      "pattern": "\\bhtn\\b|\\bhtb\\b|\\bht\\b|hypertens",
+      "name": "Hypertension"
+    },
+    {
+      "pattern": "\\bgerd\\b|acidity|reflux|gastritis",
+      "name": "GERD / acidity"
+    },
+    {
+      "pattern": "cervical|\\bneck\\b",
+      "name": "Cervical (neck) pain / spondylosis"
+    },
+    {
+      "pattern": "low(?:er)?\\s*back|lumbar|back\\s*(?:ache|pain)",
+      "name": "Low back pain"
+    },
+    {
+      "pattern": "\\boa\\b|osteo\\s*-?\\s*arthr",
+      "name": "Osteoarthritis",
+      "supersedes": [
+        "Joint pain (shoulder / knee / hip)"
+      ]
+    },
+    {
+      "pattern": "shoulder|joint|knee|\\bhip\\b",
+      "exclude": "itch|patch|rash|spots?\\b|lesion|ringworm|tinea|eczema|pimpl|boil|blister|wound|ulcer|abscess",
+      "name": "Joint pain (shoulder / knee / hip)"
+    },
+    {
+      "pattern": "asthma|\\bcopd\\b|bronchial\\s*asthma|chronic\\s*obstruct",
+      "name": "Asthma / COPD"
+    },
+    {
+      "pattern": "thyroid|hypothyr|hyperthyr",
+      "name": "Thyroid disorder"
+    },
+    {
+      "pattern": "epilep|seizur|convuls",
+      "name": "Epilepsy"
+    },
+    {
+      "pattern": "depress|\\bmdd\\b|anxiety|\\bgad\\b",
+      "name": "Depression / anxiety"
+    },
+    {
+      "pattern": "anemi|anaemi",
+      "name": "Anaemia"
+    },
+    {
+      "pattern": "\\bckd\\b|chronic\\s*kidney|renal\\s*(?:failure|insufficiency)",
+      "name": "Chronic kidney disease"
+    },
+    {
+      "pattern": "heart\\s*failure|\\bhf\\b|cardiomyop",
+      "name": "Heart failure"
+    },
+    {
+      "pattern": "\\bcad\\b|coronar|ischem|angina|\\bihd\\b",
+      "name": "Coronary artery disease"
+    },
+    {
+      "pattern": "\\bra\\b|rheumat(?:oid)?\\s*arthr",
+      "name": "Rheumatoid arthritis"
+    },
+    {
+      "pattern": "eczema|\\blsc\\b|\\bacd\\b|dermatit|pompholyx|dyshidro|xerosis|psoriasis|urticari|folliculit|scabies",
+      "name": "Skin condition"
+    },
+    {
+      "pattern": "migrain|chronic\\s*headache",
+      "name": "Migraine"
+    },
+    {
+      "pattern": "\\bpcos\\b|polycyst",
+      "name": "PCOS"
+    },
+    {
+      "pattern": "liver|hepat|cirr|\\bnafld\\b|\\bnash\\b",
+      "name": "Liver disease"
+    },
+    {
+      "pattern": "\\buti\\b|urinary\\s*tract\\s*infect",
+      "name": "Urinary tract infection"
+    },
+    {
+      "pattern": "pneumonia|\\bcap\\b|\\bhap\\b|lower\\s*resp",
+      "name": "Pneumonia"
+    },
+    {
+      "pattern": "tubercul|\\btb\\b",
+      "name": "Tuberculosis"
+    },
+    {
+      "pattern": "\\bsle\\b|lupus",
+      "name": "SLE (Lupus)"
+    },
+    {
+      "pattern": "osteopor|bone\\s*density",
+      "name": "Osteoporosis"
+    },
+    {
+      "pattern": "gout|hyperuric",
+      "name": "Gout"
+    },
+    {
+      "pattern": "\\bbph\\b|benign\\s*prost|prostat",
+      "name": "BPH / Prostate"
+    },
+    {
+      "pattern": "dyslipid|hyperlipid|hypercholesterol",
+      "name": "Dyslipidaemia"
+    },
+    {
+      "pattern": "dysmenorrh|menstrual\\s*(?:pain|disorder|irregul)",
+      "name": "Dysmenorrhoea"
+    },
+    {
+      "pattern": "herpes\\s*zost|shingles",
+      "name": "Herpes zoster"
+    },
+    {
+      "pattern": "dengue|malaria|typhoid|enteric\\s*fever",
+      "name": "Tropical infection"
+    },
+    {
+      "pattern": "obesity|\\bbmi\\b.*(?:30|obese)",
+      "name": "Obesity"
+    }
   ],
-
   "condition_meds": {
     "Type 2 diabetes mellitus": "metf|glim|glic|insul|sitag|vildag|dapag|empag|teneli|voglib|piogl|linag",
-    "Hypertension": "telmi|amlod|losar|olmes|metop|atenol|ramip|enalap|chlorthal|hydrochl|cilnid|nebiv|bisop",
+    "Hypertension": "telmi|telma|amlo|losar|olmes|metop|atenol|ramip|enalap|chlorthal|hydrochlorothi|hctz|cilnid|nebiv|bisop",
     "GERD / acidity": "omez|omep|panto|rabep|esomep|domper|ranit|famot|sucral|antacid",
     "Asthma / COPD": "salbut|levosalb|budesonid|formot|monteluk|ipratrop|theophyl|flutic|tiotropi",
-    "Thyroid disorder": "levothyr|thyrox|methim|carbim|propylth",
+    "Thyroid disorder": "levothyr|thyrox|eltroxin|thyronorm|lethyrox|methim|carbim|neomercaz|propylth|(?:hypo|hyper)?\\s*thyroid\\s+(?:drugs?|medicines?|meds?|tabs?|tablets?)",
     "Epilepsy": "leveti|carbamaz|phenyt|valpro|lamotrig|topira|oxcarbaz|clobaz",
     "Depression / anxiety": "sertral|fluoxet|escitalop|duloxet|venlaf|paroxet|amitript|clonazep|alprazol",
     "Anaemia": "ferrous|iron|folic|cyanocobal|erythropoi|darbepoe",
@@ -48,7 +147,7 @@
     "Heart failure": "carvedil|bisop|metop|enalap|ramip|losart|spironol|furosem|torsem",
     "Coronary artery disease": "aspirin|ecosprin|clopid|ticagrel|atorvas|rosuvas|nitrog|isosorbid",
     "Rheumatoid arthritis": "methotrex|hydroxychlor|sulfasalaz|leflunomid",
-    "Skin condition": "betameth|clobetasol|hydrocorti|flucinol|fusid|mupirocin|ketocon|clotrimaz",
+    "Skin condition": "betameth|clobetasol|lobet|tenovate|hydrocorti|flucinol|fusid|mupirocin|ketocon|clotrimaz",
     "Migraine": "sumatript|rizatript|proprano|topira|flunariz",
     "PCOS": "letrozol|clomiphen|drospirenon",
     "Liver disease": "ursodeox|lactulose|rifaxim",
@@ -59,7 +158,6 @@
     "Osteoporosis": "alendr|risedro|zoledr|calcitr|calcium|denosumab",
     "Obesity": "orlistat|liraglut|semaglut"
   },
-
   "condition_labs": {
     "Type 2 diabetes mellitus": "hba1c|glyco|glucose|sugar|fructos",
     "Hypertension": "urea|creatinine|sodium|potassium|\\bbun\\b|egfr|cholesterol|lipid|triglycer",
@@ -75,20 +173,380 @@
     "Gout": "uric\\s*acid|urate",
     "Tuberculosis": "esr|\\bcbc\\b|sputum|mantoux|quantiferon"
   },
-
   "pain_meds": "diclo|nucox|etor|etosh|acecl|ibup|parac|nervi|nervup|calsh|calc|cal\\+|shell|thiocol|pregab|duloxe",
-
   "pain_conditions": [
     "Cervical (neck) pain / spondylosis",
     "Low back pain",
     "Joint pain (shoulder / knee / hip)",
+    "Osteoarthritis",
     "Rheumatoid arthritis",
     "Gout",
     "Osteoporosis"
   ],
-
-  "nsaid_pattern": "diclo|nucox|etor|etosh|acecl|ibup|naprox|indometh|pirox|mefen",
-
+  "nsaid_pattern": "diclo|dicof|nucox|etor|etosh|ezact|retoz|arcox|etody|acecl|hifenac|zerodo|zerodal|ibup|brufen|combiflam|naprox|indometh|pirox|mefen|meftal|nimes|nise|voveran|dynapar",
+  "_medicine_classes_doc": "What a medicine is, by name pattern (first matches win, all matching classes are listed). Shown with each medicine in the review evidence so the model never has to guess what a medicine is for.",
+  "medicine_classes": [
+    {
+      "class": "NSAID (pain / anti-inflammatory)",
+      "pattern": "fenac|diclo|dicof|nucox|etor|etosh|ezact|retoz|arcox|etody|acecl|hifenac|zerodo|zerodal|ibup|brufen|combiflam|naprox|indometh|pirox|mefen|meftal|nimes|nise|sumo|voveran|dynapar"
+    },
+    {
+      "class": "Paracetamol (analgesic / antipyretic)",
+      "pattern": "paracet|\\bpcm\\b|dolo|calpol|crocin|pacimol"
+    },
+    {
+      "class": "Opioid analgesic",
+      "pattern": "tramad|tapent|ultracet"
+    },
+    {
+      "class": "Acid suppressant (PPI / H2 blocker / antacid)",
+      "pattern": "omez|omep|panto|auspanta|rantac|aciloc|rabep|razo|esomep|nexpro|ranit|famot|sucral|antacid|gelusil|digene"
+    },
+    {
+      "class": "Prokinetic / antiemetic",
+      "pattern": "domper|\\bdsr\\b|ondans|emeset|vomikind|itopri"
+    },
+    {
+      "class": "Systemic corticosteroid",
+      "pattern": "omnacort|wysolon|predni|deflaz|defcort|dzacort|defza|methylpred|medrol|dexameth|dexona|betnesol"
+    },
+    {
+      "class": "Topical corticosteroid",
+      "pattern": "lobet|clobet|tenovate|betnovate|betameth|halobet|m[eo]m[eo]met|hydrocort|flucinol|fluticasone\\s+cream"
+    },
+    {
+      "class": "Antihistamine",
+      "pattern": "diphenhydr|cetir|citriz|levocet|fexofen|allegra|loratad|chlorphen|\\bavil\\b|hydroxyz|atarax|bilast|ebast|\\blc\\b"
+    },
+    {
+      "class": "Leukotriene antagonist (anti-allergic)",
+      "pattern": "monteluk|montek|montair|moter"
+    },
+    {
+      "class": "Antibiotic",
+      "pattern": "augment|amox|clavam|azithro|azee|cefix|cefpod|cefurox|cefadrox|ceftri|cipro|cifran|ciplox|oflox|levoflox|doxy|metronid|nitrofur|linezol|clarithro|cotrimox"
+    },
+    {
+      "class": "Antifungal",
+      "pattern": "flucon|itracon|terbinaf|ketocon|clotrim|lulicon|amorolf|sertacon|micon"
+    },
+    {
+      "class": "Cough / mucolytic",
+      "pattern": "ambrodil|ambrox|bromhex|ascoril|grilinctus|benadryl|dextromethor|guaifen|cough"
+    },
+    {
+      "class": "Bronchodilator / inhaled asthma medicine",
+      "pattern": "salbut|levosalb|asthalin|budesonid|formot|ipratrop|theophyl|deriphyl|tiotropi|foracort|seroflo"
+    },
+    {
+      "class": "Antihypertensive",
+      "pattern": "telmi|telma|amlo|losar|olmes|metop|atenol|ramip|enalap|chlorthal|hydrochlorothi|\\bhctz\\b|cilnid|nebiv|bisop"
+    },
+    {
+      "class": "Antidiabetic",
+      "pattern": "metf|glim|glic|insul|sitag|vildag|dapag|empag|teneli|voglib|piogl|linag"
+    },
+    {
+      "class": "Lipid-lowering",
+      "pattern": "atorvas|rosuvas|simvas|fenofi|ezetim"
+    },
+    {
+      "class": "Antiplatelet",
+      "pattern": "aspirin|ecosprin|clopid|ticagrel"
+    },
+    {
+      "class": "Thyroid medicine",
+      "pattern": "levothyr|thyrox|eltroxin|thyronorm|methim|carbim"
+    },
+    {
+      "class": "Nerve vitamin (B12 / neurotropic)",
+      "pattern": "nervup|neuronz|methylcob|methycob|methyc|methoc|mecobal|cobalam|neurobion|nurokind|neurokind|\\bb12\\b|benfotiam"
+    },
+    {
+      "class": "Neuropathic pain medicine",
+      "pattern": "pregab|gabap|duloxe|nortrip|amitrip"
+    },
+    {
+      "class": "Calcium / vitamin D supplement",
+      "pattern": "calc|\\bcal\\b|shelcal|shell-?cal|incepcal|\\bd3\\b|uprise|calcirol"
+    },
+    {
+      "class": "Vitamin / mineral supplement",
+      "pattern": "b\\s*-?\\s*complex|b\\s*-?\\s*plex\\b|becosul|multivit|zincovit|folic|ferrous|\\biron\\b|vitamin|\\bvit\\b|evion"
+    },
+    {
+      "class": "Digestive enzyme",
+      "pattern": "enzyme|aristozyme"
+    },
+    {
+      "class": "Laxative",
+      "pattern": "lactulose|duphalac|cremaffin|isabgol|bisacod|sennos"
+    },
+    {
+      "class": "Soothing / emollient lotion",
+      "pattern": "calamine|vaselin|vasalin|emollient|moistur"
+    },
+    {
+      "class": "Antispasmodic",
+      "pattern": "drotav|dicyclo|cyclopam|spasm"
+    },
+    {
+      "class": "Anthelmintic / antiparasitic (incl. scabicide)",
+      "pattern": "albend|mebend|ivermect|permethr|praziq|pyrantel"
+    },
+    {
+      "class": "Topical immunomodulator (non-steroid)",
+      "pattern": "tacrol|pimecrol"
+    },
+    {
+      "class": "Topical acne treatment",
+      "pattern": "benzoyl|adapal|tretino|deriva|nadoxin"
+    },
+    {
+      "class": "Antiviral",
+      "pattern": "acyclo|valacyc|oseltam|famcicl"
+    },
+    {
+      "class": "Antiepileptic",
+      "pattern": "leveti|carbamaz|phenyt|valpro|lamotrig|topira|oxcarbaz|clobaz"
+    },
+    {
+      "class": "Antidepressant / anxiolytic",
+      "pattern": "sertral|fluoxet|escitalop|duloxet|venlaf|paroxet|amitript|clonazep|alprazol|etizol"
+    },
+    {
+      "class": "Diuretic",
+      "pattern": "furosem|torsem|spironol|hydrochlorothi|chlorthal|indapam"
+    },
+    {
+      "class": "Anticoagulant",
+      "pattern": "warfar|acitrom|apixab|rivaroxab|dabigat|heparin"
+    },
+    {
+      "class": "Hormonal / contraceptive",
+      "pattern": "progest|estradi|norethist|drospiren|levonorg|dydrogest|medroxy"
+    },
+    {
+      "class": "Muscle relaxant",
+      "pattern": "thiocolch|chlorzox|tizanid|baclof|methocarb|myoril"
+    },
+    {
+      "class": "Antimalarial",
+      "pattern": "chloroquin|artesun|artemet|primaqu"
+    },
+    {
+      "class": "Antitubercular",
+      "pattern": "isoniaz|rifamp|pyrazin|ethamb"
+    },
+    {
+      "class": "Uric-acid lowering",
+      "pattern": "allopur|febuxos"
+    },
+    {
+      "class": "Nasal decongestant / nasal spray",
+      "pattern": "otrivin|xylometaz|oxymetaz|nasivion"
+    },
+    {
+      "class": "Antiseptic / gargle / mouthwash",
+      "pattern": "betadine|povidone|chlorhex|hexidine"
+    },
+    {
+      "class": "Other",
+      "pattern": "(?!)"
+    }
+  ],
+  "_class_treats_doc": "A medicine of this class is a specific treatment for the condition (used with resolved classes, so any brand counts).",
+  "class_treats": {
+    "Hypertension": "Antihypertensive",
+    "Type 2 diabetes mellitus": "Antidiabetic",
+    "Dyslipidaemia": "Lipid-lowering",
+    "Thyroid disorder": "Thyroid medicine",
+    "Asthma / COPD": "Bronchodilator / inhaled asthma medicine",
+    "Epilepsy": "Antiepileptic",
+    "Depression / anxiety": "Antidepressant / anxiolytic",
+    "Gout": "Uric-acid lowering",
+    "Tuberculosis": "Antitubercular",
+    "GERD / acidity": "Acid suppressant (PPI / H2 blocker / antacid)"
+  },
+  "_max_daily_dose_doc": "Usual adult maximum daily oral dose (mg). Checked only when the strength is written on the medicine and the regimen is a morning-noon-night count (1-0-1); topical forms are skipped.",
+  "max_daily_dose": [
+    {
+      "pattern": "etoric|ezact|retoz|arcox|etosh|nucox|etody|^etor",
+      "drug": "etoricoxib",
+      "max_mg": 120
+    },
+    {
+      "pattern": "acecl|hifenac",
+      "drug": "aceclofenac",
+      "max_mg": 200
+    },
+    {
+      "pattern": "diclo|dicof|voveran|dynapar",
+      "drug": "diclofenac",
+      "max_mg": 150
+    },
+    {
+      "pattern": "ibup|brufen",
+      "drug": "ibuprofen",
+      "max_mg": 3200
+    },
+    {
+      "pattern": "naprox",
+      "drug": "naproxen",
+      "max_mg": 1500
+    },
+    {
+      "pattern": "mefen|meftal",
+      "drug": "mefenamic acid",
+      "max_mg": 1500
+    },
+    {
+      "pattern": "nimes|nise",
+      "drug": "nimesulide",
+      "max_mg": 200
+    },
+    {
+      "pattern": "tramad",
+      "drug": "tramadol",
+      "max_mg": 400
+    },
+    {
+      "pattern": "paracet|\\bpcm\\b|dolo|calpol|crocin|pacimol|acetaminophen",
+      "drug": "paracetamol",
+      "max_mg": 4000
+    },
+    {
+      "pattern": "celecox",
+      "drug": "celecoxib",
+      "max_mg": 400
+    },
+    {
+      "pattern": "piroxic",
+      "drug": "piroxicam",
+      "max_mg": 20
+    },
+    {
+      "pattern": "ketorol",
+      "drug": "ketorolac",
+      "max_mg": 40
+    },
+    {
+      "pattern": "indometh",
+      "drug": "indomethacin",
+      "max_mg": 200
+    },
+    {
+      "pattern": "metformin",
+      "drug": "metformin",
+      "max_mg": 2550
+    },
+    {
+      "pattern": "glimepir|glimperid",
+      "drug": "glimepiride",
+      "max_mg": 8
+    },
+    {
+      "pattern": "amlodip",
+      "drug": "amlodipine",
+      "max_mg": 10
+    },
+    {
+      "pattern": "telmisart",
+      "drug": "telmisartan",
+      "max_mg": 80
+    },
+    {
+      "pattern": "atorvast",
+      "drug": "atorvastatin",
+      "max_mg": 80
+    },
+    {
+      "pattern": "rosuvast",
+      "drug": "rosuvastatin",
+      "max_mg": 40
+    },
+    {
+      "pattern": "pregabal",
+      "drug": "pregabalin",
+      "max_mg": 600
+    },
+    {
+      "pattern": "gabapent",
+      "drug": "gabapentin",
+      "max_mg": 3600
+    }
+  ],
+  "_red_flag_symptoms_doc": "Symptoms that can have a cardiac cause; flagged when the patient has a cardiovascular risk condition or is 50 or older.",
+  "red_flag_symptoms": {
+    "title": "Possibly cardiac symptoms with cardiovascular risk",
+    "tags": [
+      "chest_pain",
+      "breathlessness",
+      "palpitations",
+      "syncope"
+    ],
+    "level": "medium",
+    "pattern": "chest\\s*(?:pain|tight|heav|discomfort)|breath(?:ing)?\\s*(?:difficulty|lessness)|breathless|dyspn|short(?:ness)?\\s*of\\s*breath|syncop|black\\s*out|palpitat",
+    "risk_conditions": [
+      "Type 2 diabetes mellitus",
+      "Hypertension",
+      "Dyslipidaemia",
+      "Coronary artery disease",
+      "Chronic kidney disease",
+      "Heart failure"
+    ],
+    "risk_age": 50
+  },
+  "_chronic_treatment_doc": "Conditions whose own medicines are expected on later prescriptions; a gap is flagged when they stop appearing.",
+  "chronic_treatment_conditions": [
+    "Type 2 diabetes mellitus",
+    "Hypertension",
+    "Thyroid disorder",
+    "Epilepsy",
+    "Asthma / COPD",
+    "Heart failure",
+    "Coronary artery disease",
+    "Dyslipidaemia"
+  ],
+  "_long_standing_doc": "Long-standing conditions without a monitored medicine: listed as active once diagnosed at any visit (with chronic_treatment_conditions, cardiometabolic_conditions and control_labs).",
+  "long_standing_conditions": [
+    "Osteoarthritis",
+    "Rheumatoid arthritis",
+    "Chronic kidney disease",
+    "SLE (Lupus)",
+    "Osteoporosis",
+    "Gout",
+    "BPH / Prostate",
+    "Liver disease"
+  ],
+  "low_bp_symptom_tags": [
+    "dizziness",
+    "syncope",
+    "weakness_fatigue"
+  ],
+  "_indication_required_doc": "Conditions whose specific medicines are rarely given for anything else; such a medicine with the condition nowhere in the record is flagged. Ingredients with common other uses are excepted.",
+  "indication_required": {
+    "conditions": [
+      "Hypertension",
+      "Type 2 diabetes mellitus",
+      "Thyroid disorder"
+    ],
+    "except_generics": "propranol|metoprol|atenol|bisoprol|nebivol|carvedil|clonid"
+  },
+  "_persistent_red_flags_doc": "Lesions, bleeding or weight loss lasting weeks in an adult: a serious cause has to be excluded.",
+  "persistent_red_flags": {
+    "title": "Persistent ulcer / lump / bleeding",
+    "level": "high",
+    "pattern": "ulcer|lump|mass|growth|non[-\\s]?healing|bleed|weight\\s*loss|hoarse",
+    "tags": [
+      "bleeding",
+      "weight_loss"
+    ],
+    "min_days": 21,
+    "min_age": 18,
+    "significance": "Present for weeks or longer; a lesion, bleeding or weight loss that persists needs evaluation to exclude a serious cause."
+  },
+  "low_bp_symptoms": "dizz|giddi|faint|light\\s*-?\\s*head|black\\s*out|syncop|weakness|\\bfall",
   "nsaid_risk_conditions": [
     "Hypertension",
     "Type 2 diabetes mellitus",
@@ -97,14 +555,12 @@
     "Coronary artery disease",
     "Gout"
   ],
-
   "bp_lower_target_conditions": [
     "Type 2 diabetes mellitus",
     "Chronic kidney disease",
     "Coronary artery disease",
     "Heart failure"
   ],
-
   "cardiometabolic_conditions": [
     "Type 2 diabetes mellitus",
     "Hypertension",
@@ -113,63 +569,882 @@
     "Obesity",
     "PCOS"
   ],
-
   "control_labs": {
-    "Type 2 diabetes mellitus": {"pattern": "hba1c|glyco|glucose|sugar", "direction": "high", "label": "HbA1c / glucose", "level": "high"},
-    "Thyroid disorder": {"pattern": "\\btsh\\b|\\bt3\\b|\\bt4\\b|\\bft3\\b|\\bft4\\b", "direction": "any", "label": "thyroid function", "level": "medium"},
-    "Anaemia": {"pattern": "^(?!.*glyc).*(?:h(?:a)?emoglobin|\\bhb\\b)", "direction": "low", "label": "haemoglobin", "level": "medium"},
-    "Gout": {"pattern": "uric", "direction": "high", "label": "uric acid", "level": "medium"},
-    "Dyslipidaemia": {"pattern": "triglycer|\\bldl|vldl|cholest", "direction": "high", "label": "lipid profile", "level": "medium"},
-    "Chronic kidney disease": {"pattern": "creatinine|egfr", "direction": "any", "label": "creatinine / eGFR", "level": "high"},
-    "Liver disease": {"pattern": "bilirubin|sgot|sgpt|\\bast\\b|\\balt\\b", "direction": "high", "label": "liver function", "level": "medium"}
+    "Type 2 diabetes mellitus": {
+      "pattern": "hba1c|glyco|glucose|sugar",
+      "direction": "high",
+      "label": "HbA1c / glucose",
+      "level": "high"
+    },
+    "Thyroid disorder": {
+      "pattern": "\\btsh\\b|\\bt3\\b|\\bt4\\b|\\bft3\\b|\\bft4\\b",
+      "direction": "any",
+      "label": "thyroid function",
+      "level": "medium"
+    },
+    "Anaemia": {
+      "pattern": "^(?!.*glyc).*(?:h(?:a)?emoglobin|\\bhb\\b)",
+      "direction": "low",
+      "label": "haemoglobin",
+      "level": "medium"
+    },
+    "Gout": {
+      "pattern": "uric",
+      "direction": "high",
+      "label": "uric acid",
+      "level": "medium"
+    },
+    "Dyslipidaemia": {
+      "pattern": "triglycer|\\bldl|vldl|cholest",
+      "direction": "high",
+      "label": "lipid profile",
+      "level": "medium"
+    },
+    "Chronic kidney disease": {
+      "pattern": "creatinine|egfr",
+      "direction": "any",
+      "label": "creatinine / eGFR",
+      "level": "high"
+    },
+    "Liver disease": {
+      "pattern": "bilirubin|sgot|sgpt|\\bast\\b|\\balt\\b",
+      "direction": "high",
+      "label": "liver function",
+      "level": "medium"
+    }
   },
-
   "condition_symptoms": {
     "Type 2 diabetes mellitus": [
-      {"pattern": "vision|eye", "title": "Visual symptoms with diabetes", "level": "high", "significance": "Visual change in diabetes can reflect hyperglycaemia or retinopathy."},
-      {"pattern": "dry(?:ness)?\\s*(?:in\\s*)?mouth|thirst|weakness|fatigue|urination", "title": "Symptoms consistent with hyperglycaemia", "level": "medium", "significance": "Recurring alongside out-of-range glycaemic results.", "requires_abnormal_control": true},
-      {"pattern": "numb|tingl|burning\\s*(?:feet|foot|sole)", "title": "Possible neuropathic symptoms with diabetes", "level": "medium", "significance": "Sensory symptoms in diabetes can reflect peripheral neuropathy."}
+      {
+        "pattern": "(?:foot|feet|toe|thum|heel|sole|leg|ankle)\\W+(?:\\w+\\W+){0,3}?(?:wound|ulcer|injur|blister|cut|sore|infect)|(?:wound|ulcer|injur|blister|cut|sore|infect)\\w*\\W+(?:\\w+\\W+){0,3}?(?:foot|feet|toe|heel|sole|leg|ankle)",
+        "title": "Foot / leg wound or injury with diabetes",
+        "tags": [
+          "foot_or_leg_wound"
+        ],
+        "level": "high",
+        "significance": "Wounds on the feet or legs heal slowly in diabetes and can become infected or ulcerate."
+      },
+      {
+        "pattern": "vision|eye",
+        "title": "Visual symptoms with diabetes",
+        "tags": [
+          "visual_change"
+        ],
+        "level": "high",
+        "significance": "Visual change in diabetes can reflect hyperglycaemia or retinopathy."
+      },
+      {
+        "pattern": "dry(?:ness)?\\s*(?:in\\s*)?mouth|thirst|weakness|fatigue|urination",
+        "title": "Symptoms consistent with hyperglycaemia",
+        "tags": [
+          "thirst_polyuria",
+          "weakness_fatigue"
+        ],
+        "level": "medium",
+        "significance": "Recurring alongside out-of-range glycaemic results.",
+        "requires_abnormal_control": true
+      }
     ],
     "Hypertension": [
-      {"pattern": "headache|giddiness|dizz|palpitat|chest\\s*pain", "title": "Symptoms that can accompany raised BP", "level": "medium", "significance": ""}
+      {
+        "pattern": "headache|giddiness|dizz|palpitat|chest\\s*pain",
+        "title": "Symptoms that can accompany raised BP",
+        "tags": [
+          "headache",
+          "dizziness",
+          "palpitations",
+          "chest_pain"
+        ],
+        "level": "medium",
+        "significance": "",
+        "requires_raised_bp": true
+      }
     ],
     "Asthma / COPD": [
-      {"pattern": "breathless|wheez|cough|short(?:ness)?\\s*of\\s*breath|dyspn", "title": "Recurring respiratory symptoms", "level": "medium", "significance": "Persistent symptoms may reflect incomplete control."}
+      {
+        "pattern": "breathless|wheez|cough|short(?:ness)?\\s*of\\s*breath|dyspn",
+        "title": "Recurring respiratory symptoms",
+        "tags": [
+          "breathlessness",
+          "cough_cold"
+        ],
+        "level": "medium",
+        "significance": "Persistent symptoms may reflect incomplete control."
+      }
     ],
     "Thyroid disorder": [
-      {"pattern": "palpitat|weight|tired|fatigue|hair\\s*fall|intoleran", "title": "Symptoms that can relate to thyroid status", "level": "medium", "significance": ""}
+      {
+        "pattern": "palpitat|weight|tired|fatigue|hair\\s*fall|intoleran",
+        "title": "Symptoms that can relate to thyroid status",
+        "tags": [
+          "palpitations",
+          "weakness_fatigue",
+          "weight_loss"
+        ],
+        "level": "medium",
+        "significance": ""
+      }
     ],
     "Anaemia": [
-      {"pattern": "weakness|fatigue|giddiness|dizz|breathless|pallor", "title": "Symptoms consistent with anaemia", "level": "medium", "significance": ""}
+      {
+        "pattern": "weakness|fatigue|giddiness|dizz|breathless|pallor",
+        "title": "Symptoms consistent with anaemia",
+        "tags": [
+          "weakness_fatigue",
+          "dizziness",
+          "breathlessness"
+        ],
+        "level": "medium",
+        "significance": ""
+      }
     ],
     "Heart failure": [
-      {"pattern": "breathless|swell|orthopn|dyspn", "title": "Symptoms that can reflect fluid status", "level": "high", "significance": "Breathlessness or swelling in heart failure needs review."}
+      {
+        "pattern": "breathless|swell|orthopn|dyspn",
+        "title": "Symptoms that can reflect fluid status",
+        "tags": [
+          "breathlessness",
+          "leg_swelling"
+        ],
+        "level": "high",
+        "significance": "Breathlessness or swelling in heart failure needs review."
+      }
     ],
     "Epilepsy": [
-      {"pattern": "seizur|fit|convuls|faint|black\\s*out", "title": "Seizure-type events recorded", "level": "high", "significance": "Recurrent events may indicate incomplete control."}
+      {
+        "pattern": "seizur|fit|convuls|faint|black\\s*out",
+        "title": "Seizure-type events recorded",
+        "tags": [
+          "syncope"
+        ],
+        "level": "high",
+        "significance": "Recurrent events may indicate incomplete control."
+      }
     ]
   },
-
   "symptom_med_links": [
-    {"title": "Leg / ankle swelling", "symptom": "swell", "site": "leg|ankle|foot|feet", "only_if_med": false,
-     "meds": [
-       {"pattern": "amlod|nifed|felod|cilnid", "note": "Calcium-channel blockers are a known cause of ankle swelling."},
-       {"pattern": "piogl", "note": "Pioglitazone can cause fluid retention."}
-     ]},
-    {"title": "Cough while on an ACE inhibitor", "symptom": "cough", "site": "", "only_if_med": true,
-     "meds": [{"pattern": "ramip|enalap|lisinop|perindop", "note": "ACE inhibitors are a known cause of dry cough."}]},
-    {"title": "Muscle pain while on a statin", "symptom": "muscle|myalg|body\\s*ache", "site": "", "only_if_med": true,
-     "meds": [{"pattern": "atorvas|rosuvas|simvas", "note": "Statins can cause muscle symptoms."}]}
+    {
+      "title": "Leg / ankle swelling",
+      "tags": [
+        "leg_swelling"
+      ],
+      "symptom": "swell",
+      "site": "leg|ankle|foot|feet",
+      "only_if_med": false,
+      "meds": [
+        {
+          "pattern": "amlod|nifed|felod|cilnid",
+          "note": "Calcium-channel blockers are a known cause of ankle swelling."
+        },
+        {
+          "pattern": "piogl",
+          "note": "Pioglitazone can cause fluid retention."
+        }
+      ]
+    },
+    {
+      "title": "Cough while on an ACE inhibitor",
+      "tags": [
+        "cough_cold"
+      ],
+      "symptom": "cough",
+      "site": "",
+      "only_if_med": true,
+      "meds": [
+        {
+          "pattern": "ramip|enalap|lisinop|perindop",
+          "note": "ACE inhibitors are a known cause of dry cough."
+        }
+      ]
+    },
+    {
+      "title": "Muscle pain while on a statin",
+      "tags": [
+        "musculoskeletal_pain"
+      ],
+      "symptom": "muscle|myalg|body\\s*ache",
+      "site": "",
+      "only_if_med": true,
+      "meds": [
+        {
+          "pattern": "atorvas|rosuvas|simvas",
+          "note": "Statins can cause muscle symptoms."
+        }
+      ]
+    }
   ],
-
+  "neuropathic_symptoms": {
+    "title": "Possible neuropathic symptoms",
+    "tags": [
+      "neuropathic_sensory"
+    ],
+    "level": "medium",
+    "pattern": "numb|tingl|pins\\s*(?:and|&)\\s*needles|burning\\W+(?:\\w+\\W+){0,3}?(?:feet|foot|soles?|legs?|palms?|hands?)\\b|\\b(?:feet|foot|soles?|legs?|palms?|hands?)\\W+(?:\\w+\\W+){0,2}?burning",
+    "exclude": "itch|rash|crack|spot|patch|boil|infect|wound|blister|red|urin|mictur",
+    "treatment_meds": "methyc|methoc|mecobal|cobalam|neurob|\\bb12\\b|pregab|gabap|duloxe|nortrip|amitrip",
+    "cause_conditions": [
+      "Type 2 diabetes mellitus",
+      "Thyroid disorder",
+      "Chronic kidney disease",
+      "Anaemia"
+    ]
+  },
+  "steroids": {
+    "systemic": "omnacort|wysolon|predni|deflaz|defcort|dzacort|defza|methylpred|medrol|dexameth|dexona|betnesol",
+    "topical_potent": "lobet|clobet|tenovate|betnovate|betameth|halobet|mometas"
+  },
+  "venous_pattern": "varicos|venous|stasis",
   "renal_caution_meds": "metf|lithi|spironol|digox|gabapent|pregab",
-
   "kidney_risk_conditions": [
     "Hypertension",
     "Type 2 diabetes mellitus",
     "Chronic kidney disease",
     "Heart failure"
   ],
-
-  "impression_keywords": "eczema|lsc|tinea[\\w\\s]*|dermatitis|psoriasis|urticaria|folliculitis|scabies|dysmenorrhea|herpes\\s+zoster|gastroenteritis|t2dm|htn|diabetes|asthma|copd|epilepsy|migraine|thyroid|anemia|anaemia|arthritis|lupus|pcos|cirrhosis|hepatitis|depression|anxiety|bronchitis|pneumonia|tuberculosis|malaria|dengue|typhoid|uti|urti|pharyngitis|tonsillitis|sinusitis|cellulitis|abscess|gout|gerd|reflux|dyslipid|obesity|osteopor|bph|prostat|hypothyr|hyperthyr|seizure|vertigo|neuropath"
+  "_drug_rules_doc": "Medicine duplication and interaction rules (clinical_snapshot.py). Duplicates are checked per clinical day (all encounters on one date), so two departments prescribing on the same day are caught. duplicate_classes: medicine_classes whose second same-day member adds risk, not benefit (NSAIDs counted oral only). nsaid_cumulative_days: total stated duration of oral NSAIDs across the record (one value per clinical day) from which a flag is raised. azole_long_term: an oral azole on at least min_days clinical days, or for at least min_duration_days in total, with no liver test (liver_tests: lab_catalog keys).",
+  "drug_rules": {
+    "duplicate_classes": [
+      "NSAID (pain / anti-inflammatory)",
+      "Acid suppressant (PPI / H2 blocker / antacid)",
+      "Calcium / vitamin D supplement",
+      "Antihistamine",
+      "Systemic corticosteroid"
+    ],
+    "nsaid_cumulative_days": 30,
+    "systemic_azole": "itracon|ketocon|flucon|voricon|posacon",
+    "ccb": "amlod|nifed|felod|cilnid|lercan|diltia|verapam",
+    "ccb_lookback_days": 30,
+    "arb_acei": "telmi|losar|olmes|valsar|irbes|candes|azilsar|ramip|enala|lisino|perind|captop",
+    "diuretic": "furos|torse|hydrochlor|chlorthal|indapam|spironol|eplere|metol",
+    "azole_long_term": {
+      "min_days": 2,
+      "min_duration_days": 14
+    },
+    "liver_tests": [
+      "bilirubin_total",
+      "bilirubin_direct",
+      "bilirubin_indirect",
+      "ast",
+      "alt",
+      "alp",
+      "ggt",
+      "panel_lft"
+    ]
+  },
+  "_expected_investigations_doc": "A finding in the record that is normally followed by a test, and the record holds no such test (any date): reported as a record gap, never as advice. Each rule matches visit diagnoses / complaints by pattern (on at least min_days clinical days), or a temperature reading at or above temp_f_at_least. tests: lab_catalog keys, any one of which closes the gap.",
+  "expected_investigations": [
+    {
+      "finding": "urinary frequency",
+      "pattern": "frequen\\w*\\s+(?:of\\s+)?(?:urin|mictur)|urinary\\s+frequen|polyuria|frequent\\s+urin",
+      "min_days": 1,
+      "tests": [
+        "panel_urine",
+        "urine_acr"
+      ],
+      "test_label": "urine test",
+      "level": "medium",
+      "why": "Urinary frequency is usually checked with a urine test (infection, sugar)."
+    },
+    {
+      "finding": "recurrent fungal skin infection",
+      "pattern": "tinea|fung|ringworm|dermatophyt|candid",
+      "min_days": 2,
+      "tests": [
+        "glucose_fasting",
+        "glucose_random",
+        "glucose_pp",
+        "hba1c"
+      ],
+      "test_label": "blood glucose / HbA1c",
+      "level": "medium",
+      "why": "Recurrent fungal infection is a recognised presentation of raised blood glucose."
+    },
+    {
+      "finding": "fever",
+      "pattern": "fever|pyrexia|febrile",
+      "min_days": 1,
+      "temp_f_at_least": 100.4,
+      "tests": [
+        "panel_cbc",
+        "wbc",
+        "haemoglobin",
+        "platelets"
+      ],
+      "test_label": "blood count",
+      "level": "info",
+      "why": "A blood count is the usual first test for a fever."
+    },
+    {
+      "finding": "recurring weakness / fatigue",
+      "pattern": "weak|fatigue|tired|letharg",
+      "min_days": 2,
+      "tests": [
+        "haemoglobin",
+        "panel_cbc",
+        "pcv"
+      ],
+      "test_label": "haemoglobin / blood count",
+      "level": "info",
+      "why": "Anaemia is a common, testable cause of recurring weakness."
+    },
+    {
+      "finding": "tingling / numbness",
+      "pattern": "tingl|numb|pins and needles|pins & needles",
+      "min_days": 1,
+      "tests": [
+        "glucose_fasting",
+        "glucose_random",
+        "glucose_pp",
+        "hba1c",
+        "vitamin_b12"
+      ],
+      "test_label": "blood glucose / HbA1c or vitamin B12",
+      "level": "info",
+      "why": "Raised glucose and low B12 are common, testable causes of peripheral nerve symptoms."
+    },
+    {
+      "finding": "periorbital swelling",
+      "symptom_tags": [
+        "periorbital_oedema",
+        "facial_swelling"
+      ],
+      "pattern": "(?!)",
+      "min_days": 1,
+      "requires_conditions": [],
+      "tests": [
+        "creatinine",
+        "egfr",
+        "urine_acr",
+        "panel_urine",
+        "panel_kft"
+      ],
+      "test_label": "kidney function / urine protein",
+      "level": "medium",
+      "why": "Swelling with diabetes or hypertension is usually checked with kidney function and urine protein."
+    }
+  ],
+  "_diagnosis_refinements_doc": "Groups of diagnosis names where one is a refinement or synonym of another (lichen simplex chronicus is a form of eczema). A document and a record naming members of one group are not reported as a diagnosis mismatch.",
+  "diagnosis_refinements": [
+    [
+      "eczema",
+      "dermatitis",
+      "lsc",
+      "lichen simplex",
+      "lichen simplex chronicus",
+      "neurodermatitis"
+    ],
+    [
+      "t2dm",
+      "dm",
+      "diabetes",
+      "diabetes mellitus",
+      "type 2 diabetes"
+    ],
+    [
+      "htn",
+      "hypertension"
+    ],
+    [
+      "gerd",
+      "acidity",
+      "gastritis",
+      "reflux",
+      "apd",
+      "dyspepsia"
+    ],
+    [
+      "tinea",
+      "tinea corporis",
+      "tinea cruris",
+      "fungal infection",
+      "dermatophytosis",
+      "ringworm"
+    ]
+  ],
+  "_guidelines_doc": [
+    "Indian guideline context for the clinical snapshot (clinical_snapshot.guideline_context) and the AI review evidence.",
+    "Each section has a source and 'verified'. A section runs only when verified is true, or when ENABLE_DRAFT_GUIDELINES is on (testing). Set verified to true only after a clinician checks every value against the cited document.",
+    "Rows state what the record shows against the guideline; they never recommend a medicine, dose or test.",
+    "Change 'version' whenever a value changes: it is part of the review prompt version, so cached reviews regenerate."
+  ],
+  "guidelines": {
+    "_verification_doc": "A section is verified only with verified: true, verified_by (the clinician) and verified_on (YYYY-MM-DD); set them with scripts/verify_guideline.py. Verified sections raise flags and reach the AI review and brief; draft sections are shown to the doctor and in /summary as information only.",
+    "version": "2026-11-draft1",
+    "diabetes_control": {
+      "condition": "Type 2 diabetes mellitus",
+      "analyte": "hba1c",
+      "label": "HbA1c",
+      "target_below": 7.0,
+      "unit": "%",
+      "recheck_days_at_target": 180,
+      "recheck_days_above_target": 90,
+      "glucose_analytes": [
+        "glucose_fasting",
+        "glucose_pp",
+        "glucose_random"
+      ],
+      "source": "ICMR Guidelines for Management of Type 2 Diabetes (2018)",
+      "verified": false,
+      "verified_by": null,
+      "verified_on": null
+    },
+    "bp_targets": {
+      "condition": "Hypertension",
+      "default": [
+        140,
+        90
+      ],
+      "lower": [
+        130,
+        80
+      ],
+      "_lower_doc": "The lower target applies when the patient has a bp_lower_target_conditions condition.",
+      "source": "ICMR Standard Treatment Workflow: Hypertension / India Hypertension Control Initiative",
+      "verified": false,
+      "verified_by": null,
+      "verified_on": null
+    },
+    "monitoring": {
+      "_doc": "Tests a condition is followed with, by lab_catalog key; due when the latest dated result is older than every_days. HbA1c for diabetes is in diabetes_control.",
+      "conditions": {
+        "Type 2 diabetes mellitus": [
+          {
+            "label": "kidney function (creatinine / eGFR)",
+            "keys": [
+              "creatinine",
+              "egfr"
+            ],
+            "every_days": 365
+          },
+          {
+            "label": "urine albumin (ACR)",
+            "keys": [
+              "urine_acr"
+            ],
+            "every_days": 365
+          },
+          {
+            "label": "lipid profile",
+            "keys": [
+              "cholesterol",
+              "ldl",
+              "triglycerides"
+            ],
+            "every_days": 365
+          }
+        ],
+        "Hypertension": [
+          {
+            "label": "creatinine",
+            "keys": [
+              "creatinine",
+              "egfr"
+            ],
+            "every_days": 365
+          },
+          {
+            "label": "potassium",
+            "keys": [
+              "potassium"
+            ],
+            "every_days": 365
+          },
+          {
+            "label": "lipid profile",
+            "keys": [
+              "cholesterol",
+              "ldl",
+              "triglycerides"
+            ],
+            "every_days": 365
+          },
+          {
+            "label": "blood glucose / HbA1c",
+            "keys": [
+              "glucose_fasting",
+              "glucose_random",
+              "glucose_pp",
+              "hba1c"
+            ],
+            "every_days": 365
+          },
+          {
+            "label": "urine test",
+            "keys": [
+              "panel_urine",
+              "urine_acr"
+            ],
+            "every_days": 365
+          }
+        ]
+      },
+      "source": "ICMR T2DM Guidelines (2018); ICMR Standard Treatment Workflow: Hypertension",
+      "verified": false,
+      "verified_by": null,
+      "verified_on": null
+    },
+    "haemoglobin": {
+      "_doc": "Anaemia thresholds by age (years), sex and pregnancy, g/dL. The first matching group applies; 'below' = anaemia threshold, bands from mildest.",
+      "groups": [
+        {
+          "group": "pregnant woman",
+          "sex": "f",
+          "pregnant": true,
+          "below": 11.0,
+          "bands": [
+            [
+              10.0,
+              "mild anaemia"
+            ],
+            [
+              7.0,
+              "moderate anaemia"
+            ],
+            [
+              0,
+              "severe anaemia"
+            ]
+          ]
+        },
+        {
+          "group": "child 1-4 years",
+          "min_age": 1,
+          "max_age": 4,
+          "below": 11.0,
+          "bands": [
+            [
+              10.0,
+              "mild anaemia"
+            ],
+            [
+              7.0,
+              "moderate anaemia"
+            ],
+            [
+              0,
+              "severe anaemia"
+            ]
+          ]
+        },
+        {
+          "group": "child 5-11 years",
+          "min_age": 5,
+          "max_age": 11,
+          "below": 11.5,
+          "bands": [
+            [
+              11.0,
+              "mild anaemia"
+            ],
+            [
+              8.0,
+              "moderate anaemia"
+            ],
+            [
+              0,
+              "severe anaemia"
+            ]
+          ]
+        },
+        {
+          "group": "adolescent 12-14 years",
+          "min_age": 12,
+          "max_age": 14,
+          "below": 12.0,
+          "bands": [
+            [
+              11.0,
+              "mild anaemia"
+            ],
+            [
+              8.0,
+              "moderate anaemia"
+            ],
+            [
+              0,
+              "severe anaemia"
+            ]
+          ]
+        },
+        {
+          "group": "woman (15+, not pregnant)",
+          "sex": "f",
+          "min_age": 15,
+          "below": 12.0,
+          "bands": [
+            [
+              11.0,
+              "mild anaemia"
+            ],
+            [
+              8.0,
+              "moderate anaemia"
+            ],
+            [
+              0,
+              "severe anaemia"
+            ]
+          ]
+        },
+        {
+          "group": "man (15+)",
+          "sex": "m",
+          "min_age": 15,
+          "below": 13.0,
+          "bands": [
+            [
+              11.0,
+              "mild anaemia"
+            ],
+            [
+              8.0,
+              "moderate anaemia"
+            ],
+            [
+              0,
+              "severe anaemia"
+            ]
+          ]
+        }
+      ],
+      "pregnancy_pattern": "pregnan|gravid|antenatal|\\banc\\b|gestation|\\bg\\d\\s*p\\d|\\bprimi\\b",
+      "pregnancy_days": 280,
+      "source": "Anemia Mukt Bharat (MoHFW) / WHO haemoglobin thresholds (2011)",
+      "verified": false,
+      "verified_by": null,
+      "verified_on": null
+    },
+    "bmi": {
+      "underweight_below": 18.5,
+      "overweight_from": 23.0,
+      "obese_from": 25.0,
+      "source": "Consensus BMI cut-offs for Asian Indians (Misra et al., 2009), as used in ICMR-INDIAB",
+      "verified": false,
+      "verified_by": null,
+      "verified_on": null
+    },
+    "lab_context": {
+      "_doc": "Bands for a result read against guideline cut-offs, also when the report gave no range. [from, below, label]; null = open. Not a lab status.",
+      "analytes": {
+        "hba1c": {
+          "unit": "%",
+          "skip_conditions": [
+            "Type 2 diabetes mellitus"
+          ],
+          "bands": [
+            [
+              5.7,
+              6.5,
+              "prediabetes range"
+            ],
+            [
+              6.5,
+              null,
+              "diabetes range"
+            ]
+          ],
+          "source": "ICMR T2DM Guidelines (2018)"
+        },
+        "glucose_fasting": {
+          "unit": "mg/dl",
+          "skip_conditions": [
+            "Type 2 diabetes mellitus"
+          ],
+          "bands": [
+            [
+              100,
+              126,
+              "impaired fasting glucose range"
+            ],
+            [
+              126,
+              null,
+              "diabetes range"
+            ]
+          ],
+          "source": "ICMR T2DM Guidelines (2018)"
+        },
+        "glucose_pp": {
+          "unit": "mg/dl",
+          "skip_conditions": [
+            "Type 2 diabetes mellitus"
+          ],
+          "bands": [
+            [
+              140,
+              200,
+              "impaired glucose tolerance range"
+            ],
+            [
+              200,
+              null,
+              "diabetes range"
+            ]
+          ],
+          "source": "ICMR T2DM Guidelines (2018)"
+        },
+        "egfr": {
+          "unit": "ml/min/1.73m2",
+          "bands": [
+            [
+              null,
+              15,
+              "kidney failure range (G5)"
+            ],
+            [
+              15,
+              30,
+              "severely decreased (G4)"
+            ],
+            [
+              30,
+              45,
+              "moderately to severely decreased (G3b)"
+            ],
+            [
+              45,
+              60,
+              "mildly to moderately decreased (G3a)"
+            ],
+            [
+              60,
+              90,
+              "mildly decreased (G2)"
+            ]
+          ],
+          "source": "KDIGO CKD classification, as used in ICMR Standard Treatment Workflow: CKD"
+        },
+        "urine_acr": {
+          "unit": "mg/g",
+          "bands": [
+            [
+              30,
+              300,
+              "moderately increased albuminuria (A2)"
+            ],
+            [
+              300,
+              null,
+              "severely increased albuminuria (A3)"
+            ]
+          ],
+          "source": "KDIGO CKD classification, as used in ICMR Standard Treatment Workflow: CKD"
+        }
+      },
+      "verified": false,
+      "verified_by": null,
+      "verified_on": null
+    },
+    "antibiotics": {
+      "_doc": "Antibiotic at a visit whose diagnosis is only a usually-viral syndrome, with no bacterial marker in that visit's diagnosis or complaint.",
+      "usually_viral": [
+        {
+          "name": "upper respiratory infection / common cold",
+          "pattern": "\\burti\\b|common\\s*cold|coryza|rhinitis|nasopharyng|\\bcold\\b|\\bflu\\b|influenza"
+        },
+        {
+          "name": "acute bronchitis",
+          "pattern": "bronchitis"
+        },
+        {
+          "name": "acute gastroenteritis / diarrhoea",
+          "pattern": "gastroenter|\\bage\\b|diarrh|loose\\s*(?:stools?|motions?)"
+        },
+        {
+          "name": "viral / acute febrile illness",
+          "pattern": "viral\\s*fever|febrile\\s*illness|\\bafi\\b|viral\\s*infection"
+        },
+        {
+          "name": "herpes zoster",
+          "pattern": "herpes\\s*zost|shingles"
+        }
+      ],
+      "bacterial_markers": "pus|exudat|purulent|bloody|blood\\s*in\\s*stools?|dysenter|pneumon|tonsillit|otitis|sinusit|cellulit|abscess|\\buti\\b|urinary|typhoid|enteric|cholera|wound|infected|bacterial|tubercul|\\btb\\b|strep",
+      "repeat_courses": 3,
+      "repeat_within_days": 90,
+      "source": "ICMR Treatment Guidelines for Antimicrobial Use in Common Syndromes (2019)",
+      "verified": false,
+      "verified_by": null,
+      "verified_on": null
+    },
+    "tb_screening": {
+      "cough_pattern": "cough",
+      "min_days": 14,
+      "tested_pattern": "sputum|\\bafb\\b|cbnaat|truenat|naat|genexpert|\\btb\\b|tubercul|mantoux|\\bigra\\b|chest\\s*x|\\bcxr\\b|x-?\\s*ray\\s*chest",
+      "source": "National TB Elimination Programme (NTEP): presumptive TB",
+      "verified": false,
+      "verified_by": null,
+      "verified_on": null
+    }
+  },
+  "impression_keywords": "eczema|lsc|tinea[\\w\\s]*|dermatitis|psoriasis|urticaria|folliculitis|scabies|dysmenorrhea|herpes\\s+zoster|gastroenteritis|t2dm|htn|diabetes|asthma|copd|epilepsy|migraine|thyroid|anemia|anaemia|arthritis|lupus|pcos|cirrhosis|hepatitis|depression|anxiety|bronchitis|pneumonia|tuberculosis|malaria|dengue|typhoid|uti|urti|pharyngitis|tonsillitis|sinusitis|cellulitis|abscess|gout|gerd|reflux|dyslipid|obesity|osteopor|bph|prostat|hypothyr|hyperthyr|seizure|vertigo|neuropath",
+  "_symptom_combinations_doc": "A symptom concept (symptom_map tags) that matters with a condition or with another symptom: flagged when any 'tags' symptom is recorded together with any 'with_conditions' or any 'with_tags' symptom anywhere in the record.",
+  "symptom_combinations": [
+    {
+      "title": "Possible renal/fluid cause – check creatinine, urine albumin",
+      "tags": [
+        "periorbital_oedema",
+        "facial_swelling"
+      ],
+      "with_conditions": [
+        "Hypertension",
+        "Type 2 diabetes mellitus"
+      ],
+      "with_tags": [
+        "leg_swelling"
+      ],
+      "level": "medium",
+      "significance": "Swelling around the eyes or face with hypertension, diabetes or leg swelling can reflect kidney disease (protein loss) or fluid retention."
+    }
+  ],
+  "_undiagnosed_lab_bands_doc": "A lab result in a band that suggests a condition the record does not note (no diagnosis, complaint, long-term entry or treating medicine): flagged as 'probable', never as a diagnosis. Bands are [from, to) on the latest dated result in 'unit' (mmol/mol HbA1c is converted). treated_by_class: a medicine of this class means the condition is managed.",
+  "undiagnosed_lab_bands": [
+    {
+      "analyte": "hba1c",
+      "label": "HbA1c",
+      "unit": "%",
+      "condition": "Type 2 diabetes mellitus",
+      "treated_by_class": "Antidiabetic",
+      "normal_below": 5.7,
+      "source": "HbA1c: normal <5.7% (<42 mmol/mol); prediabetes 5.7-6.4% (42-47 mmol/mol); diabetes >=6.5% (>=48 mmol/mol)",
+      "bands": [
+        {
+          "from": 5.7,
+          "to": 6.5,
+          "title": "Probable prediabetes",
+          "level": "medium",
+          "meaning": "HbA1c 5.7-6.4% (42-47 mmol/mol) indicates an increased risk of developing type 2 diabetes; not noted in the record."
+        },
+        {
+          "from": 6.5,
+          "to": null,
+          "title": "Probable diabetes",
+          "level": "high",
+          "meaning": "HbA1c 6.5% or higher (>=48 mmol/mol) supports a diagnosis of diabetes, usually confirmed with a repeat test; not noted in the record."
+        }
+      ]
+    }
+  ],
+  "_symptom_medicine_risks_doc": "A symptom linked to a medicine risk when the record supports it: the symptom (symptom_map tags), at least min_days of the medicine group by the given route (course windows, registry therapeutic group), and one of with_conditions. Raised only when none of 'tests' is in the record; the flag names the test to check.",
+  "symptom_medicine_risks": [
+    {
+      "title": "Weakness with long NSAID use and gastritis – check haemoglobin",
+      "tags": [
+        "weakness_fatigue"
+      ],
+      "med_group": "nsaid",
+      "route": "oral",
+      "min_days": 14,
+      "with_conditions": [
+        "GERD / acidity"
+      ],
+      "tests": [
+        "haemoglobin",
+        "panel_cbc",
+        "pcv"
+      ],
+      "level": "medium",
+      "significance": "Weakness after long NSAID use with gastritis can reflect slow blood loss from the stomach (anaemia)."
+    }
+  ]
 }

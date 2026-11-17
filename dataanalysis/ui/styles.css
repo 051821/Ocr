@@ -164,6 +164,18 @@ div[data-testid="stExpander"] { margin-bottom: 0.6rem; }
                          border-radius: 8px; padding: 10px 14px; margin-bottom: 0.55rem; display: flex; min-height: 68px; }
 .evidence-chip { display: inline-block; background: #eef1f6; color: var(--cd-muted); border: 1px solid var(--cd-border);
                  border-radius: 999px; padding: 4px 10px; margin: 3px; font-size: 0.78rem; }
+/* Patient brief: one colored card per theme, short points inside. --accent is set per card. */
+.brief-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 1rem; }
+.brief-card { background: var(--cd-card); border: 1px solid var(--cd-border); border-top: 4px solid var(--accent);
+              border-radius: 10px; padding: 11px 15px 9px; box-shadow: var(--cd-shadow); }
+.brief-card.brief-wide { grid-column: 1 / -1; }
+.brief-head { display: flex; align-items: center; gap: 7px; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em;
+              text-transform: uppercase; color: var(--accent); margin-bottom: 6px; }
+.brief-points { margin: 0; padding-left: 1.1rem; font-size: 0.9rem; line-height: 1.5; color: var(--cd-text); }
+.brief-points li { margin-bottom: 4px; }
+.brief-points li::marker { color: var(--accent); font-size: 1.1em; }
+.brief-points b { color: #0f2a5f; }
+@media (max-width: 900px) { .brief-grid { grid-template-columns: 1fr; } }
 .ai-declaration-footer { font-size: 0.78rem; color: var(--cd-muted); border-top: 1px solid var(--cd-border);
                          padding-top: 8px; margin-top: 1.2rem; font-style: italic; }
 
@@ -193,4 +205,12 @@ div[data-testid="stExpander"] { margin-bottom: 0.6rem; }
 .ca-flag { font-size: 0.82rem; padding: 6px 9px; border-radius: 6px; margin-bottom: 5px; line-height: 1.4; color: var(--cd-text); }
 .ca-flag-high { background: var(--cd-red-soft); border-left: 3px solid var(--cd-red); }
 .ca-flag-medium { background: var(--cd-amber-soft); border-left: 3px solid var(--cd-amber); }
+/* Assistant Summary: one short line per concern, grouped by topic, in a box that scrolls on its own. */
+.ca-group { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--cd-muted, #5b6474); margin: 8px 0 3px; }
+.ca-line { font-size: 0.8rem; line-height: 1.35; padding: 4px 8px; margin-bottom: 3px; border-radius: 5px; color: var(--cd-text); }
+.ca-line-high { background: var(--cd-red-soft); border-left: 3px solid var(--cd-red); }
+.ca-line-verify, .ca-line-medium { background: var(--cd-amber-soft); border-left: 3px solid var(--cd-amber); }
 .st-key-care_assistant [data-testid="stChatMessage"], .st-key-care_assistant_large [data-testid="stChatMessage"] { padding: 0.4rem 0.5rem; font-size: 0.86rem; }
+
+/* 'verify': a high-risk finding that depends on an unclear fact (e.g. route not written). */
+.snap-verify { border-left: 4px solid #ff9800; }

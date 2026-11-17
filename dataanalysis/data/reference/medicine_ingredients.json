@@ -1,0 +1,1017 @@
+{
+  "_doc": [
+    "Brand -> active ingredients, ingredient -> rule groups, dose-form words and drug-lab effect windows (medicine_profile.py).",
+    "Every class rule (NSAID, corticosteroid, azole, PPI, calcium / vitamin D) runs on the ingredients a product expands to, never on its brand name.",
+    "Resolution order for a prescription line: this brand table -> each part of a '+' combination -> ingredient names written in the line -> the cached term resolution (clinical_terms) -> unmapped.",
+    "Unmapped products, and products only the model resolved, are written to the unmapped-brands report (config UNMAPPED_BRANDS_REPORT) so they can be added here.",
+    "Brand keys are lower case, without dose-form words (tab, cream, gel ...) or strengths. Add a brand only when its composition has been checked; set verified_by / verified_on when a pharmacist has checked an entry."
+  ],
+  "version": "2026-11-ingredients1",
+  "brands": {
+    "nucoxia": {
+      "ingredients": [
+        "etoricoxib"
+      ],
+      "form": "tablet"
+    },
+    "etoshine": {
+      "ingredients": [
+        "etoricoxib"
+      ],
+      "form": "tablet"
+    },
+    "ezact": {
+      "ingredients": [
+        "etoricoxib"
+      ],
+      "form": "tablet"
+    },
+    "arcoxia": {
+      "ingredients": [
+        "etoricoxib"
+      ],
+      "form": "tablet"
+    },
+    "voveran": {
+      "ingredients": [
+        "diclofenac"
+      ]
+    },
+    "dynapar": {
+      "ingredients": [
+        "diclofenac"
+      ]
+    },
+    "zerodol": {
+      "ingredients": [
+        "aceclofenac"
+      ],
+      "form": "tablet"
+    },
+    "zerodol p": {
+      "ingredients": [
+        "aceclofenac",
+        "paracetamol"
+      ],
+      "form": "tablet"
+    },
+    "zerodol sp": {
+      "ingredients": [
+        "aceclofenac",
+        "paracetamol",
+        "serratiopeptidase"
+      ],
+      "form": "tablet"
+    },
+    "hifenac": {
+      "ingredients": [
+        "aceclofenac"
+      ],
+      "form": "tablet"
+    },
+    "combiflam": {
+      "ingredients": [
+        "ibuprofen",
+        "paracetamol"
+      ],
+      "form": "tablet"
+    },
+    "brufen": {
+      "ingredients": [
+        "ibuprofen"
+      ],
+      "form": "tablet"
+    },
+    "meftal": {
+      "ingredients": [
+        "mefenamic acid"
+      ],
+      "form": "tablet"
+    },
+    "meftal spas": {
+      "ingredients": [
+        "mefenamic acid",
+        "dicyclomine"
+      ],
+      "form": "tablet"
+    },
+    "nise": {
+      "ingredients": [
+        "nimesulide"
+      ],
+      "form": "tablet"
+    },
+    "naxdom": {
+      "ingredients": [
+        "naproxen",
+        "domperidone"
+      ],
+      "form": "tablet"
+    },
+    "dolo": {
+      "ingredients": [
+        "paracetamol"
+      ],
+      "form": "tablet"
+    },
+    "crocin": {
+      "ingredients": [
+        "paracetamol"
+      ],
+      "form": "tablet"
+    },
+    "calpol": {
+      "ingredients": [
+        "paracetamol"
+      ],
+      "form": "tablet"
+    },
+    "ultracet": {
+      "ingredients": [
+        "tramadol",
+        "paracetamol"
+      ],
+      "form": "tablet"
+    },
+    "omnacortil": {
+      "ingredients": [
+        "prednisolone"
+      ],
+      "form": "tablet"
+    },
+    "wysolon": {
+      "ingredients": [
+        "prednisolone"
+      ],
+      "form": "tablet"
+    },
+    "defcort": {
+      "ingredients": [
+        "deflazacort"
+      ],
+      "form": "tablet"
+    },
+    "medrol": {
+      "ingredients": [
+        "methylprednisolone"
+      ],
+      "form": "tablet"
+    },
+    "dexona": {
+      "ingredients": [
+        "dexamethasone"
+      ]
+    },
+    "betnesol": {
+      "ingredients": [
+        "betamethasone"
+      ],
+      "form": "tablet"
+    },
+    "tenovate": {
+      "ingredients": [
+        "clobetasol"
+      ],
+      "form": "cream"
+    },
+    "lobate": {
+      "ingredients": [
+        "clobetasol"
+      ],
+      "form": "cream"
+    },
+    "lobet gm": {
+      "ingredients": [
+        "clobetasol",
+        "gentamicin",
+        "miconazole"
+      ],
+      "form": "cream"
+    },
+    "betnovate": {
+      "ingredients": [
+        "betamethasone"
+      ],
+      "form": "cream"
+    },
+    "momate": {
+      "ingredients": [
+        "mometasone"
+      ],
+      "form": "cream"
+    },
+    "elocon": {
+      "ingredients": [
+        "mometasone"
+      ],
+      "form": "cream"
+    },
+    "fucibet": {
+      "ingredients": [
+        "fusidic acid",
+        "betamethasone"
+      ],
+      "form": "cream"
+    },
+    "quadriderm": {
+      "ingredients": [
+        "betamethasone",
+        "gentamicin",
+        "tolnaftate",
+        "clioquinol"
+      ],
+      "form": "cream"
+    },
+    "candid b": {
+      "ingredients": [
+        "clotrimazole",
+        "beclometasone"
+      ],
+      "form": "cream"
+    },
+    "candid": {
+      "ingredients": [
+        "clotrimazole"
+      ],
+      "form": "cream"
+    },
+    "forcan": {
+      "ingredients": [
+        "fluconazole"
+      ],
+      "form": "tablet"
+    },
+    "zocon": {
+      "ingredients": [
+        "fluconazole"
+      ],
+      "form": "tablet"
+    },
+    "canditral": {
+      "ingredients": [
+        "itraconazole"
+      ],
+      "form": "capsule"
+    },
+    "sporanox": {
+      "ingredients": [
+        "itraconazole"
+      ],
+      "form": "capsule"
+    },
+    "omez": {
+      "ingredients": [
+        "omeprazole"
+      ],
+      "form": "capsule"
+    },
+    "pan": {
+      "ingredients": [
+        "pantoprazole"
+      ],
+      "form": "tablet"
+    },
+    "pantocid": {
+      "ingredients": [
+        "pantoprazole"
+      ],
+      "form": "tablet"
+    },
+    "pan d": {
+      "ingredients": [
+        "pantoprazole",
+        "domperidone"
+      ],
+      "form": "capsule"
+    },
+    "razo": {
+      "ingredients": [
+        "rabeprazole"
+      ],
+      "form": "tablet"
+    },
+    "nexpro": {
+      "ingredients": [
+        "esomeprazole"
+      ],
+      "form": "tablet"
+    },
+    "shelcal": {
+      "ingredients": [
+        "calcium carbonate",
+        "cholecalciferol"
+      ],
+      "form": "tablet"
+    },
+    "shelcal 500": {
+      "ingredients": [
+        "calcium carbonate",
+        "cholecalciferol"
+      ],
+      "form": "tablet"
+    },
+    "cipcal": {
+      "ingredients": [
+        "calcium carbonate",
+        "cholecalciferol"
+      ],
+      "form": "tablet"
+    },
+    "calcimax": {
+      "ingredients": [
+        "calcium citrate malate",
+        "cholecalciferol"
+      ],
+      "form": "tablet"
+    },
+    "uprise d3": {
+      "ingredients": [
+        "cholecalciferol"
+      ]
+    },
+    "calcirol": {
+      "ingredients": [
+        "cholecalciferol"
+      ]
+    },
+    "tayo": {
+      "ingredients": [
+        "cholecalciferol"
+      ]
+    }
+  },
+  "_ingredients_doc": "Canonical ingredient -> rule groups, the routes the ingredient is made for, and spellings seen in records (whole words; misspellings of 6+ letters are also matched by similarity). An ingredient made for one route only fixes a line's route; several routes leave it to the written form or the prescription template.",
+  "ingredients": {
+    "diclofenac": {
+      "groups": [
+        "nsaid"
+      ],
+      "routes": [
+        "oral",
+        "topical",
+        "injection"
+      ],
+      "names": [
+        "diclofenac",
+        "diclo"
+      ]
+    },
+    "etoricoxib": {
+      "groups": [
+        "nsaid"
+      ],
+      "routes": [
+        "oral"
+      ],
+      "names": [
+        "etoricoxib",
+        "etoricoxb"
+      ]
+    },
+    "aceclofenac": {
+      "groups": [
+        "nsaid"
+      ],
+      "routes": [
+        "oral",
+        "topical"
+      ],
+      "names": [
+        "aceclofenac"
+      ],
+      "default_route": "oral"
+    },
+    "ibuprofen": {
+      "groups": [
+        "nsaid"
+      ],
+      "routes": [
+        "oral",
+        "topical"
+      ],
+      "names": [
+        "ibuprofen",
+        "ibuprofin"
+      ],
+      "default_route": "oral"
+    },
+    "naproxen": {
+      "groups": [
+        "nsaid"
+      ],
+      "routes": [
+        "oral"
+      ],
+      "names": [
+        "naproxen"
+      ]
+    },
+    "mefenamic acid": {
+      "groups": [
+        "nsaid"
+      ],
+      "routes": [
+        "oral"
+      ],
+      "names": [
+        "mefenamic"
+      ]
+    },
+    "nimesulide": {
+      "groups": [
+        "nsaid"
+      ],
+      "routes": [
+        "oral",
+        "topical"
+      ],
+      "names": [
+        "nimesulide"
+      ],
+      "default_route": "oral"
+    },
+    "piroxicam": {
+      "groups": [
+        "nsaid"
+      ],
+      "routes": [
+        "oral",
+        "topical"
+      ],
+      "names": [
+        "piroxicam"
+      ],
+      "default_route": "oral"
+    },
+    "indomethacin": {
+      "groups": [
+        "nsaid"
+      ],
+      "routes": [
+        "oral"
+      ],
+      "names": [
+        "indomethacin"
+      ]
+    },
+    "ketorolac": {
+      "groups": [
+        "nsaid"
+      ],
+      "routes": [
+        "oral",
+        "injection",
+        "drops"
+      ],
+      "names": [
+        "ketorolac"
+      ]
+    },
+    "prednisolone": {
+      "groups": [
+        "corticosteroid"
+      ],
+      "routes": [
+        "oral"
+      ],
+      "names": [
+        "prednisolone",
+        "prednisone"
+      ]
+    },
+    "methylprednisolone": {
+      "groups": [
+        "corticosteroid"
+      ],
+      "routes": [
+        "oral",
+        "injection"
+      ],
+      "names": [
+        "methylprednisolone"
+      ],
+      "default_route": "oral"
+    },
+    "deflazacort": {
+      "groups": [
+        "corticosteroid"
+      ],
+      "routes": [
+        "oral"
+      ],
+      "names": [
+        "deflazacort"
+      ]
+    },
+    "dexamethasone": {
+      "groups": [
+        "corticosteroid"
+      ],
+      "routes": [
+        "oral",
+        "injection",
+        "drops"
+      ],
+      "names": [
+        "dexamethasone"
+      ]
+    },
+    "hydrocortisone": {
+      "groups": [
+        "corticosteroid"
+      ],
+      "routes": [
+        "oral",
+        "topical",
+        "injection"
+      ],
+      "names": [
+        "hydrocortisone"
+      ]
+    },
+    "betamethasone": {
+      "groups": [
+        "corticosteroid"
+      ],
+      "routes": [
+        "oral",
+        "topical",
+        "injection"
+      ],
+      "names": [
+        "betamethasone"
+      ]
+    },
+    "clobetasol": {
+      "groups": [
+        "corticosteroid"
+      ],
+      "routes": [
+        "topical"
+      ],
+      "names": [
+        "clobetasol"
+      ]
+    },
+    "mometasone": {
+      "groups": [
+        "corticosteroid"
+      ],
+      "routes": [
+        "topical",
+        "inhaled"
+      ],
+      "names": [
+        "mometasone"
+      ]
+    },
+    "fluticasone": {
+      "groups": [
+        "corticosteroid"
+      ],
+      "routes": [
+        "topical",
+        "inhaled"
+      ],
+      "names": [
+        "fluticasone"
+      ]
+    },
+    "beclometasone": {
+      "groups": [
+        "corticosteroid"
+      ],
+      "routes": [
+        "topical",
+        "inhaled"
+      ],
+      "names": [
+        "beclometasone",
+        "beclomethasone"
+      ]
+    },
+    "halobetasol": {
+      "groups": [
+        "corticosteroid"
+      ],
+      "routes": [
+        "topical"
+      ],
+      "names": [
+        "halobetasol"
+      ]
+    },
+    "triamcinolone": {
+      "groups": [
+        "corticosteroid"
+      ],
+      "routes": [
+        "topical",
+        "injection"
+      ],
+      "names": [
+        "triamcinolone"
+      ]
+    },
+    "budesonide": {
+      "groups": [
+        "corticosteroid"
+      ],
+      "routes": [
+        "inhaled",
+        "oral"
+      ],
+      "names": [
+        "budesonide"
+      ],
+      "default_route": "inhaled"
+    },
+    "fluconazole": {
+      "groups": [
+        "azole"
+      ],
+      "routes": [
+        "oral"
+      ],
+      "names": [
+        "fluconazole"
+      ]
+    },
+    "itraconazole": {
+      "groups": [
+        "azole"
+      ],
+      "routes": [
+        "oral"
+      ],
+      "names": [
+        "itraconazole"
+      ]
+    },
+    "voriconazole": {
+      "groups": [
+        "azole"
+      ],
+      "routes": [
+        "oral",
+        "injection"
+      ],
+      "names": [
+        "voriconazole"
+      ]
+    },
+    "posaconazole": {
+      "groups": [
+        "azole"
+      ],
+      "routes": [
+        "oral"
+      ],
+      "names": [
+        "posaconazole"
+      ]
+    },
+    "ketoconazole": {
+      "groups": [
+        "azole"
+      ],
+      "routes": [
+        "oral",
+        "topical"
+      ],
+      "names": [
+        "ketoconazole"
+      ]
+    },
+    "miconazole": {
+      "groups": [
+        "azole"
+      ],
+      "routes": [
+        "topical"
+      ],
+      "names": [
+        "miconazole"
+      ]
+    },
+    "clotrimazole": {
+      "groups": [
+        "azole"
+      ],
+      "routes": [
+        "topical"
+      ],
+      "names": [
+        "clotrimazole"
+      ]
+    },
+    "luliconazole": {
+      "groups": [
+        "azole"
+      ],
+      "routes": [
+        "topical"
+      ],
+      "names": [
+        "luliconazole"
+      ]
+    },
+    "eberconazole": {
+      "groups": [
+        "azole"
+      ],
+      "routes": [
+        "topical"
+      ],
+      "names": [
+        "eberconazole"
+      ]
+    },
+    "sertaconazole": {
+      "groups": [
+        "azole"
+      ],
+      "routes": [
+        "topical"
+      ],
+      "names": [
+        "sertaconazole"
+      ]
+    },
+    "omeprazole": {
+      "groups": [
+        "ppi"
+      ],
+      "routes": [
+        "oral"
+      ],
+      "names": [
+        "omeprazole"
+      ]
+    },
+    "pantoprazole": {
+      "groups": [
+        "ppi"
+      ],
+      "routes": [
+        "oral",
+        "injection"
+      ],
+      "names": [
+        "pantoprazole"
+      ],
+      "default_route": "oral"
+    },
+    "rabeprazole": {
+      "groups": [
+        "ppi"
+      ],
+      "routes": [
+        "oral"
+      ],
+      "names": [
+        "rabeprazole"
+      ]
+    },
+    "esomeprazole": {
+      "groups": [
+        "ppi"
+      ],
+      "routes": [
+        "oral",
+        "injection"
+      ],
+      "names": [
+        "esomeprazole"
+      ],
+      "default_route": "oral"
+    },
+    "lansoprazole": {
+      "groups": [
+        "ppi"
+      ],
+      "routes": [
+        "oral"
+      ],
+      "names": [
+        "lansoprazole"
+      ]
+    },
+    "calcium carbonate": {
+      "groups": [
+        "calcium"
+      ],
+      "routes": [
+        "oral"
+      ],
+      "names": [
+        "calcium carbonate"
+      ]
+    },
+    "calcium citrate malate": {
+      "groups": [
+        "calcium"
+      ],
+      "routes": [
+        "oral"
+      ],
+      "names": [
+        "calcium citrate malate",
+        "ccm"
+      ]
+    },
+    "calcium": {
+      "groups": [
+        "calcium"
+      ],
+      "routes": [
+        "oral"
+      ],
+      "names": [
+        "calcium",
+        "calc",
+        "cal"
+      ]
+    },
+    "cholecalciferol": {
+      "groups": [
+        "vitamin_d"
+      ],
+      "routes": [
+        "oral",
+        "injection"
+      ],
+      "names": [
+        "cholecalciferol",
+        "colecalciferol",
+        "vitamin d3",
+        "vitamin d",
+        "vit d3",
+        "vit d",
+        "d3"
+      ],
+      "default_route": "oral"
+    },
+    "calcitriol": {
+      "groups": [
+        "vitamin_d"
+      ],
+      "routes": [
+        "oral"
+      ],
+      "names": [
+        "calcitriol"
+      ]
+    }
+  },
+  "_groups_doc": "Rule group -> the registry medicine class it stands for. For corticosteroids and azoles the class depends on the route: topical -> topical_class, a systemic route -> systemic_class, an unclear route -> both (rules that need a systemic route then report it for checking, not as fact).",
+  "groups": {
+    "nsaid": {
+      "class": "NSAID (pain / anti-inflammatory)",
+      "terms": [
+        "nsaid"
+      ],
+      "problem": "NSAID use"
+    },
+    "corticosteroid": {
+      "systemic_class": "Systemic corticosteroid",
+      "topical_class": "Topical corticosteroid",
+      "terms": [
+        "steroid",
+        "corticosteroid"
+      ],
+      "problem": "Steroid use"
+    },
+    "azole": {
+      "class": "Antifungal",
+      "terms": [
+        "azole",
+        "antifungal"
+      ],
+      "problem": "Antifungal use"
+    },
+    "ppi": {
+      "class": "Acid suppressant (PPI / H2 blocker / antacid)",
+      "terms": [
+        "ppi",
+        "acid suppressant"
+      ],
+      "problem": "Acid suppressant"
+    },
+    "calcium": {
+      "class": "Calcium / vitamin D supplement",
+      "terms": [
+        "calcium supplement",
+        "calcium / vitamin d"
+      ],
+      "problem": "Calcium / vitamin D"
+    },
+    "vitamin_d": {
+      "class": "Calcium / vitamin D supplement",
+      "terms": [
+        "vitamin d"
+      ],
+      "problem": "Calcium / vitamin D"
+    }
+  },
+  "_forms_doc": "Dose-form words in a prescription line and the route they state.",
+  "forms": {
+    "topical": "gel|cream|oint(?:ment)?|lotion|spray|patch|soap|powder|dusting|shampoo|paste|liniment|emulgel",
+    "oral": "tab(?:let)?s?|cap(?:sule)?s?|syp|syr(?:up)?|susp(?:ension)?|sachet|granules",
+    "injection": "inj(?:ection)?",
+    "drops": "drops?|eye\\s+drops?|ear\\s+drops?",
+    "inhaled": "inhaler|rotacaps?|respules?|nebuli[sz]er|neb"
+  },
+  "_oral_prefixes_doc": "Abbreviations that mean tablet only as the first word of a line ('Ta Telmisartan', 'T. Telma').",
+  "oral_prefixes": [
+    "ta",
+    "t",
+    "tb"
+  ],
+  "_template_doc": "Route of a line written without a form ('Diclofenac'): taken from another prescription in the same record that holds the same product with a written form and nearly the same other products (Jaccard similarity of the other products >= min_similarity, at least min_shared of them).",
+  "template_inference": {
+    "min_similarity": 0.75,
+    "min_shared": 2
+  },
+  "_drug_lab_effects_doc": "A medicine is named as a possible cause of a lab result only when it was taken within window_days before the test (its course, start to start + duration, overlaps the window). group + route select the medicines; labs are lab_catalog keys; direction is the result's direction.",
+  "drug_lab_effects": [
+    {
+      "group": "corticosteroid",
+      "route": "systemic",
+      "labs": [
+        "wbc",
+        "neutrophils"
+      ],
+      "direction": "high",
+      "window_days": 7,
+      "effect": "systemic steroids raise the white cell (neutrophil) count",
+      "text_term": "steroid"
+    },
+    {
+      "group": "corticosteroid",
+      "route": "systemic",
+      "labs": [
+        "glucose_fasting",
+        "glucose_pp",
+        "glucose_random"
+      ],
+      "direction": "high",
+      "window_days": 3,
+      "effect": "systemic steroids raise blood glucose",
+      "text_term": "steroid"
+    },
+    {
+      "group": "corticosteroid",
+      "route": "systemic",
+      "labs": [
+        "hba1c"
+      ],
+      "direction": "high",
+      "window_days": 90,
+      "effect": "repeated systemic steroids can raise HbA1c",
+      "text_term": "steroid"
+    },
+    {
+      "group": "nsaid",
+      "route": "oral",
+      "labs": [
+        "creatinine",
+        "urea",
+        "bun",
+        "potassium"
+      ],
+      "direction": "high",
+      "window_days": 14,
+      "effect": "NSAIDs can reduce kidney function",
+      "text_term": "nsaid"
+    },
+    {
+      "group": "azole",
+      "route": "oral",
+      "labs": [
+        "alt",
+        "ast",
+        "alp",
+        "bilirubin_total",
+        "ggt"
+      ],
+      "direction": "high",
+      "window_days": 30,
+      "effect": "oral azoles can raise liver enzymes",
+      "text_term": "azole"
+    },
+    {
+      "group": "ppi",
+      "route": "oral",
+      "labs": [
+        "vitamin_b12"
+      ],
+      "direction": "low",
+      "window_days": 365,
+      "effect": "long-term PPIs can lower vitamin B12",
+      "text_term": "ppi"
+    }
+  ],
+  "_default_route_doc": "default_route: the route an ingredient is given by almost always in outpatient prescriptions. Used for a line with no written form only after the brand form and the prescription template; an ingredient commonly given by more than one route has none (route stays unclear).",
+  "_groups_terms_doc": "terms: words in a flag title that name the group; problem: the clinical problem label that links flags about the group (groups sharing a label are one problem)."
+}

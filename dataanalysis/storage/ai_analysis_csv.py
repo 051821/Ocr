@@ -25,7 +25,8 @@ except ImportError:
 logger = logging.getLogger(__name__)
 FULL_RERUN_THRESHOLD = 4
 ANALYSIS_TYPE = "retrospective_clinical_analysis"
-_DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "data" / "cache.db"
+# CACHE_DB_PATH overrides the location, e.g. a persistent disk on the hosted API (/var/data/cache.db).
+_DEFAULT_DB_PATH = Path(os.getenv("CACHE_DB_PATH") or Path(__file__).resolve().parents[2] / "data" / "cache.db")
 _LEGACY_CSV_PATH = Path(__file__).resolve().parents[1] / "data" / "patient_ai_analysis.csv"
 _SCHEMA_LOCK = threading.Lock()
 _INITIALIZED_DBS = set()
@@ -118,6 +119,17 @@ def _connect(path=None):
                 conn.execute("ALTER TABLE llm_cache ADD COLUMN patient_hash TEXT")
             except sqlite3.OperationalError:
                 pass  # column already exists
+            try:  # AI wording of the quick tier (quick_review), JSON, encrypted like review_md
+                conn.execute("ALTER TABLE ai_review ADD COLUMN quick_json TEXT")
+            except sqlite3.OperationalError:
+                pass
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS doctor_settings (
+                    doctor_id TEXT PRIMARY KEY,
+                    default_view TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )"""
+            )
 
             if resolved == _DEFAULT_DB_PATH.resolve():
                 _migrate_legacy_csv(conn)
@@ -197,6 +209,8 @@ def get_patient_row(patient_id, path=None):
             if decrypted is None and d["review_md"].startswith(_ENC_PREFIX):
                 return None
             d["review_md"] = decrypted
+        if d.get("quick_json"):
+            d["quick_json"] = _decrypt_val(d["quick_json"])
         return d
     finally:
         conn.close()
@@ -211,6 +225,7 @@ def upsert_ai_analysis(
     path=None,
     source_hash=None,
     hashes=None,
+    quick_json=None,
 ):
     source_hash = source_hash or patient_data.get("_review_source_hash")
     if not source_hash:
@@ -225,6 +240,7 @@ def upsert_ai_analysis(
         str(model_name or model_version or ""), stored_markdown, visit_count,
         json.dumps(hashes, sort_keys=True, separators=(",", ":")),
         int(mismatch_count), generated_at,
+        _encrypt_val(json.dumps(quick_json, ensure_ascii=False)) if quick_json else None,
     )
     conn = _connect(path)
     try:
@@ -232,8 +248,8 @@ def upsert_ai_analysis(
             conn.execute(
                 """INSERT INTO ai_review
                 (patient_id, source_hash, prompt_version, model, review_md,
-                 visit_count, visit_hashes, mismatch_count, generated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 visit_count, visit_hashes, mismatch_count, generated_at, quick_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(patient_id) DO UPDATE SET
                     source_hash=excluded.source_hash,
                     prompt_version=excluded.prompt_version,
@@ -242,7 +258,8 @@ def upsert_ai_analysis(
                     visit_count=excluded.visit_count,
                     visit_hashes=excluded.visit_hashes,
                     mismatch_count=excluded.mismatch_count,
-                    generated_at=excluded.generated_at""",
+                    generated_at=excluded.generated_at,
+                    quick_json=excluded.quick_json""",
                 values,
             )
         row = conn.execute("SELECT * FROM ai_review WHERE patient_id = ?", (values[0],)).fetchone()
@@ -250,6 +267,7 @@ def upsert_ai_analysis(
             return None
         d = dict(row)
         d["review_md"] = markdown  # Return in-memory plaintext to caller
+        d["quick_json"] = json.dumps(quick_json, ensure_ascii=False) if quick_json else None
         return d
     finally:
         conn.close()
@@ -378,3 +396,38 @@ def get_top_questions(patient_id, limit=5, min_hits=2, path=None):
     finally:
         conn.close()
 
+
+
+# ── Doctor settings (default view of the AI Analysis & Summary) ─────────────
+_VIEWS = ("quick", "detailed")
+
+
+def get_doctor_settings(doctor_id, path=None):
+    """{'doctor_id', 'default_view', 'updated_at'} or None when the doctor saved no preference."""
+    conn = _connect(path)
+    try:
+        row = conn.execute("SELECT * FROM doctor_settings WHERE doctor_id = ?", (str(doctor_id),)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def set_doctor_default_view(doctor_id, default_view, path=None):
+    """Save which tier opens by default for this doctor ('quick' or 'detailed')."""
+    view = str(default_view or "").casefold()
+    if view not in _VIEWS:
+        raise ValueError(f"default_view must be one of {_VIEWS}")
+    if not str(doctor_id or "").strip():
+        raise ValueError("doctor_id is required")
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _connect(path)
+    try:
+        with conn:
+            conn.execute(
+                """INSERT INTO doctor_settings (doctor_id, default_view, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT(doctor_id) DO UPDATE SET default_view=excluded.default_view, updated_at=excluded.updated_at""",
+                (str(doctor_id), view, now),
+            )
+        return {"doctor_id": str(doctor_id), "default_view": view, "updated_at": now}
+    finally:
+        conn.close()

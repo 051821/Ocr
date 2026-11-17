@@ -8,6 +8,9 @@ import html
 import re
 import streamlit as st
 
+from area_tiles import AREA_CSS, AREA_JS, areas_attr, tiles_html
+from medicine_grid import MED_GRID_CSS, MED_GRID_JS, medicine_grid_html
+
 from core.config import flag
 
 
@@ -77,196 +80,142 @@ def clean_clinical_impression(text: str) -> str:
 
 
 # ── AI Review Parser & Renderer ──────────────────────────────────────────────
+# Review section heading -> parsed key. Headings of older cached reviews map onto the current keys.
+_REVIEW_KEYS = {
+    "overview": "overview",
+    "overall pattern": "overview",
+    "clinical insights": "insights",
+    "key insights": "insights",
+    "risks and medication considerations": "insights",
+    "follow-up needs": "insights",
+    "review points": "insights",
+    "abnormal results": "abnormal_results",
+    "evidence": "evidence",
+}
+
+
 def parse_ai_review(markdown: str) -> dict:
     """Parse generated AI markdown into structured sections for visual rendering."""
-    sections = {
-        "overall_pattern": "",
-        "key_insights": [],
-        "review_points": [],
-        "considerations": [],
-        "evidence": [],
-        "declaration": "",
-    }
+    sections = {"overview": "", "insights": [], "abnormal_results": [], "evidence": [], "declaration": ""}
     if not markdown:
         return sections
 
     current_section = None
-    lines = markdown.splitlines()
-
-    for line in lines:
+    for line in markdown.splitlines():
         stripped = line.strip()
         if not stripped:
             continue
         if stripped.startswith("## "):
-            sec_name = stripped[3:].strip().lower()
-            if "overall pattern" in sec_name:
-                current_section = "overall_pattern"
-            elif "key insights" in sec_name:
-                current_section = "key_insights"
-            elif "review points" in sec_name:
-                current_section = "review_points"
-            elif sec_name == "general patient considerations":
-                current_section = "considerations"
-            elif "evidence" in sec_name:
-                current_section = "evidence"
-            else:
-                current_section = None
+            current_section = _REVIEW_KEYS.get(stripped[3:].strip().lower())
             continue
-        elif stripped.startswith("# "):
+        if stripped.startswith("# "):
             continue
-
         if "Retrospective record-based observations only" in stripped:
             sections["declaration"] = stripped
             continue
-
-        if current_section == "overall_pattern":
-            sections["overall_pattern"] = (sections["overall_pattern"] + " " + stripped).strip()
-        elif current_section in ("key_insights", "review_points", "considerations", "evidence"):
+        if current_section == "overview":
+            sections["overview"] = (sections["overview"] + " " + stripped).strip()
+        elif current_section:
             if stripped.startswith(("- ", "* ", "• ")):
-                bullet_text = re.sub(r"^[-*•]\s*", "", stripped).strip()
-                sections[current_section].append(bullet_text)
-            elif not sections[current_section] and stripped:
+                sections[current_section].append(re.sub(r"^[-*•]\s*", "", stripped).strip())
+            elif sections[current_section]:
+                sections[current_section][-1] += " " + stripped
+            else:
                 sections[current_section].append(stripped)
-
     return sections
 
 
-def render_doctor_friendly_ai_review(raw_markdown: str):
-    """Render the AI Clinical Review in an executive, doctor-friendly layout."""
+def _review_items_html(items):
+    return "".join(f"<li>{_md_to_html(item)}</li>" for item in items)
+
+
+# Brief themes: (icon, accent colour, full-width card). A theme the model names differently gets the default.
+_BRIEF_THEMES = {
+    "course": ("🗓️", "#104eb2", False),
+    "conditions": ("🩺", "#029c89", False),
+    "key findings": ("⚠️", "#d32f2f", True),
+    "treatment": ("💊", "#c77700", False),
+    "gaps to check": ("🔎", "#7c3aed", False),
+}
+_BRIEF_DEFAULT = ("📌", "#3B82F6", True)
+
+
+def _split_points(body: str) -> list:
+    """Split a theme's text into points at '; ' or sentence ends, never inside brackets."""
+    points, depth, start = [], 0, 0
+    for i, ch in enumerate(body):
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth = max(0, depth - 1)
+        sentence_end = ch == "." and body[i + 1:i + 2] == " " and body[i + 2:i + 3].isupper()
+        if not depth and (ch == ";" or sentence_end):
+            points.append(body[start:i])
+            start = i + 1
+    points.append(body[start:])
+    return [p.strip(" .") for p in points if p.strip(" .")]
+
+
+def _point_html(point: str) -> str:
+    """A point, with a short leading label ('Active:', 'HbA1c above range:') in bold."""
+    label = re.match(r"^([^:]{2,60}?):\s+(.+)$", point)
+    if label and len(label.group(1).split()) <= 7 and "**" not in label.group(1):
+        return f"<b>{html.escape(label.group(1))}:</b> {_md_to_html(label.group(2))}"
+    return _md_to_html(point)
+
+
+def _brief_cards_html(insights: list, tagged: list = None) -> str:
+    """One coloured card per brief theme (Course, Conditions, Key findings, Treatment, Gaps), short points inside;
+    each point carries its tile areas (data-areas) when the pipeline tagged it."""
+    tagged = {t["theme"].casefold(): t["points"] for t in tagged or []}
+    cards = []
+    for item in insights:
+        match = re.match(r"^\*\*(.+?)\*\*[:\-]?\s*(.*)$", item)
+        theme, body = (match.group(1).strip(" :"), match.group(2)) if match else ("Insight", item)
+        icon, accent, wide = _BRIEF_THEMES.get(theme.casefold(), _BRIEF_DEFAULT)
+        tags = tagged.get(theme.casefold())
+        pts = [(t["text"], t["areas"]) for t in tags] if tags else [(p, []) for p in _split_points(body)]
+        points = "".join(f"<li{areas_attr(a)}>{_point_html(p)}</li>" for p, a in pts)
+        cards.append(f'<div class="brief-card{" brief-wide" if wide else ""}" style="--accent:{accent}">'
+                     f'<div class="brief-head"><span>{icon}</span>{html.escape(theme)}</div>'
+                     f'<ul class="brief-points">{points}</ul></div>')
+    return f'<div class="brief-grid">{"".join(cards)}</div>'
+
+
+def render_patient_brief(insights: list, tagged: list = None):
+    st.html(_brief_cards_html(insights, tagged))
+
+
+def render_area_tiles(tiles: list):
+    """The patient's status tiles (shared area_tiles component) with the click-to-highlight script."""
+    st.html(f"<style>{AREA_CSS}</style>{tiles_html(tiles)}<script>{AREA_JS}</script>", unsafe_allow_javascript=True)
+
+
+def render_doctor_friendly_ai_review(raw_markdown: str, area_tags: dict = None):
+    """Render the review: the patient brief as themed cards up front, record details on demand.
+
+    area_tags (snapshot_view.tag_review) tags each point and lab detail with its tile area, for the tile highlight.
+    """
     data = parse_ai_review(raw_markdown)
-    if not data["overall_pattern"] and not data["key_insights"]:
+    if not data["overview"] and not data["insights"]:
         # Fallback to standard markdown if parsing yielded nothing
         st.markdown(strip_remote_images(raw_markdown))
         return
+    area_tags = area_tags or {}
+    body = _brief_cards_html(data["insights"], area_tags.get("insights")) if data["insights"] else ""
+    if data["abnormal_results"]:
+        lab_tags = area_tags.get("labs") or []
+        items = "".join(
+            f"<li{areas_attr(lab_tags[i]['areas'] if i < len(lab_tags) else [])}>{_md_to_html(item)}</li>"
+            for i, item in enumerate(data["abnormal_results"]))
+        body += (f'<details class="ai-lab-details"><summary>🧪 Lab details: exact values and reference ranges '
+                 f'({len(data["abnormal_results"])})</summary><ul class="ai-review-list">{items}</ul></details>')
+    st.html(body)
 
-    # 1. Executive Longitudinal Trajectory (Hero Card)
-    if data["overall_pattern"]:
-        st.markdown(f"""
-        <div class="ai-hero-card">
-            <div class="ai-card-title">
-                <span style="font-size: 1.15rem;">🩺</span> Longitudinal Clinical Trajectory
-            </div>
-            <div class="ai-hero-text">
-                {html.escape(data["overall_pattern"])}
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    # 2. Key Longitudinal Insights
-    if data["key_insights"]:
-        st.markdown('<div class="ai-section-hdr">🔍 Key Longitudinal Insights</div>', unsafe_allow_html=True)
-        for insight in data["key_insights"]:
-            title_match = re.match(r"^\*\*(.*?)\*\*[:\-]?\s*(.*)$", insight)
-            if title_match:
-                lead_title = title_match.group(1).strip()
-                body_text = title_match.group(2).strip()
-            else:
-                lead_title = ""
-                body_text = insight
-
-            # Auto-tag icons based on clinical themes
-            low = insight.lower()
-            if any(k in low for k in ("hba1c", "glucose", "diabetes", "glycemic", "triglyceride", "lipid", "cholesterol", "metabolic")):
-                icon, tag, border_color = "🩸", "Cardiometabolic & Glycemic Finding", "#EF4444"
-            elif any(k in low for k in ("pcv", "hemoglobin", "rbc", "hematol", "blood")):
-                icon, tag, border_color = "🧪", "Hematological Indicator", "#8B5CF6"
-            elif any(k in low for k in ("medication", "prescription", "discrepan", "cetirizine", "omnacortil", "reconcil")):
-                icon, tag, border_color = "💊", "Medication Reconciliation", "#c77700"
-            elif any(k in low for k in ("follow-up", "missed", "adherence", "appoint")):
-                icon, tag, border_color = "📅", "Care Continuity", "#029c89"
-            elif any(k in low for k in ("dermatol", "rash", "eczema", "zoster", "itch")):
-                icon, tag, border_color = "🩹", "Dermatological Finding", "#1b873f"
-            else:
-                icon, tag, border_color = "📌", "Longitudinal Pattern", "#3B82F6"
-
-            header_html = (
-                f'<div style="font-weight:700; font-size:0.95rem; margin-bottom:4px; color:{border_color};">'
-                f'{html.escape(lead_title)}</div>'
-            ) if lead_title else ""
-
-            st.markdown(f"""
-            <div class="ai-insight-card" style="border-left-color: {border_color};">
-                <div class="ai-tag" style="color: {border_color};">
-                    <span>{icon}</span> {tag}
-                </div>
-                {header_html}
-                <div class="ai-insight-text">{_md_to_html(body_text)}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-    # 3. Clinical Review & Verification Points
-    if data["review_points"]:
-        st.markdown('<div class="ai-section-hdr">⚠️ Items Warranting Clinical Verification</div>', unsafe_allow_html=True)
-        items_html = "".join(f"<li>{_md_to_html(pt)}</li>" for pt in data["review_points"])
-        st.markdown(f"""
-        <div class="ai-review-box">
-            <div class="ai-review-title">Clinical Audit Checkpoints</div>
-            <ul class="ai-review-list">{items_html}</ul>
-        </div>
-        """, unsafe_allow_html=True)
-
-
-    # 4. Deterministic General Patient Considerations (Patient Discussion Guide)
-    if data["considerations"]:
-        st.markdown('<div class="ai-section-hdr">💬 Patient Education & Discussion Considerations</div>', unsafe_allow_html=True)
-        st.caption("General educational notes selected from documented conditions; discuss individual care with the clinician.")
-        col1, col2 = st.columns(2)
-        for i, item in enumerate(data["considerations"]):
-            target_col = col1 if (i % 2 == 0) else col2
-            title_match = re.match(r"^\*\*(.*?)\*\*[:\-]?\s*(.*)$", item)
-            if title_match:
-                lead_title = title_match.group(1).strip()
-                body_text = title_match.group(2).strip()
-            else:
-                lead_title = ""
-                body_text = item
-
-            low = item.lower()
-            if any(k in low for k in ("diet", "food", "meal", "nutrition", "carbohydrate", "sugar", "sweetened", "glycemic")):
-                c_icon = "🥗"
-                default_title = "Dietary Carbohydrate & Glycemic Nutrition"
-            elif any(k in low for k in ("fat", "lipid", "triglyceride", "cholesterol", "oil", "fried", "heart")):
-                c_icon = "🥑"
-                default_title = "Lipid & Heart-Healthy Nutrition"
-            elif any(k in low for k in ("sodium", "salt", "hypertension", "blood pressure")):
-                c_icon = "🧂"
-                default_title = "Dietary Sodium & Blood Pressure"
-            elif any(k in low for k in ("activity", "exercise", "walk")):
-                c_icon = "🏃"
-                default_title = "Daily Physical Activity"
-            elif any(k in low for k in ("skin", "eczema", "emollient", "moisturizer", "barrier")):
-                c_icon = "🧴"
-                default_title = "Skin Barrier & Emollient Care"
-            elif any(k in low for k in ("symptom", "thirst", "vision", "fever", "seek", "warning", "attention", "hypoglycemia", "hyperglycemia")):
-                c_icon = "🩺"
-                default_title = "Symptom Awareness & Warning Signs"
-            elif any(k in low for k in ("follow-up", "monitoring", "appoint", "check", "adherence")):
-                c_icon = "📅"
-                default_title = "Care Continuity & Follow-Up"
-            else:
-                c_icon = "💡"
-                default_title = "Condition Self-Care Consideration"
-
-            card_title = lead_title if lead_title else default_title
-
-            with target_col:
-                st.markdown(f"""
-                <div class="ai-consideration-card">
-                    <div style="width: 100%;">
-                        <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
-                            <span style="font-size: 1.15rem;">{c_icon}</span>
-                            <span style="font-weight: 700; font-size: 0.86rem; color: #1b873f;">{html.escape(card_title)}</span>
-                        </div>
-                        <div style="font-size: 0.88rem; line-height: 1.48; color: inherit;">{html.escape(body_text)}</div>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-
-    # 5. Evidence References
     if data["evidence"]:
-        st.markdown('<div class="ai-section-hdr">📎 Source Traceability References</div>', unsafe_allow_html=True)
-        chips_html = "".join(f'<span class="evidence-chip">📌 {html.escape(e)}</span>' for e in data["evidence"])
-        st.markdown(f'<div style="margin-bottom: 1rem;">{chips_html}</div>', unsafe_allow_html=True)
+        with st.expander("📎 Source encounters"):
+            chips_html = "".join(f'<span class="evidence-chip">📌 {html.escape(e)}</span>' for e in data["evidence"])
+            st.markdown(f'<div style="margin-bottom: 1rem;">{chips_html}</div>', unsafe_allow_html=True)
 
     # Closing Notice
     dec_text = data["declaration"] or "Retrospective record-based observations only; clinician review is required for interpretation and decision-making."
@@ -279,7 +228,7 @@ def render_doctor_friendly_ai_review(raw_markdown: str):
 
 # ── Clinical Timeline Visual Encounter Renderer ─────────────────────────────
 def render_clinical_encounter(idx: int, visit: dict, med_shifts_for_visit: list):
-    """Render a single clinical encounter compactly with high visual doctor-friendliness."""
+    """Render a single clinical visit compactly with high visual doctor-friendliness."""
     v_date = (visit.get("visit_date") or "Unspecified")[:10]
     v_id = str(visit.get("visit_id", f"V{idx}"))
 
@@ -355,11 +304,11 @@ def render_clinical_encounter(idx: int, visit: dict, med_shifts_for_visit: list)
             fu_badges.append(f'<span class="badge-pending">📅 Scheduled: {f_date} ({st_val})</span>')
 
     # Header title for expander
-    header_title = f"🗓️ Encounter #{idx} — {v_date} (Visit ID: {v_id[:8]}...{v_id[-4:]})"
+    header_title = f"🗓️ Visit #{idx} — {v_date} (Visit ID: {v_id[:8]}...{v_id[-4:]})"
 
     with st.expander(header_title, expanded=True):
         # 1. Chief Complaint & Diagnoses
-        cc = visit.get("db_chief_complaint") or visit.get("chief_complaint") or "Routine encounter / Not documented"
+        cc = visit.get("db_chief_complaint") or visit.get("chief_complaint") or "Routine visit / Not documented"
         st.markdown(
             f'<div style="margin-bottom: 0.6rem;">'
             f'<span style="font-weight: 700; color: #104eb2; font-size: 0.90rem; text-transform: uppercase; letter-spacing: 0.05em;">Chief Complaint:</span>'
@@ -386,7 +335,7 @@ def render_clinical_encounter(idx: int, visit: dict, med_shifts_for_visit: list)
         with col_docs:
             st.markdown('<div class="encounter-subheading">📄 Clinical Documents & Extraction</div>', unsafe_allow_html=True)
             if not docs:
-                st.markdown("<p style='font-size:0.85rem; color:#5b6474; font-style:italic;'>No documents attached to this encounter (Direct database entry).</p>", unsafe_allow_html=True)
+                st.markdown("<p style='font-size:0.85rem; color:#5b6474; font-style:italic;'>No documents attached to this visit (Direct database entry).</p>", unsafe_allow_html=True)
             elif not active_docs:
                 st.markdown(f"<div class='doc-clean-card'><span style='color:#5b6474; font-size:0.86rem;'>📄 {len(docs)} verified clinical documents processed (no narrative notes).</span></div>", unsafe_allow_html=True)
             else:
@@ -476,7 +425,11 @@ def render_clinical_encounter(idx: int, visit: dict, med_shifts_for_visit: list)
         # 3. Bottom Row: Medication Shifts & Follow-up Action
         col_meds, col_fu = st.columns([1.2, 0.8])
         with col_meds:
-            st.markdown('<div class="encounter-subheading">💊 Medication Shifts in this Encounter</div>', unsafe_allow_html=True)
+            st.markdown('<div class="encounter-subheading">💊 Medication Shifts in this Visit</div>', unsafe_allow_html=True)
+            specs = visit.get("prescriber_specializations") or []
+            if specs:  # specialization of the prescribing doctor(s) only, never a name
+                st.markdown("<div style='font-size:0.82rem; color:#475569; margin-bottom:4px;'>Prescribed by: "
+                            + " · ".join(f"<b>{html.escape(s)}</b>" for s in specs) + "</div>", unsafe_allow_html=True)
             if med_shifts_for_visit:
                 for ch in med_shifts_for_visit:
                     ch_type = ch.get("type", "")
@@ -503,7 +456,7 @@ def render_clinical_encounter(idx: int, visit: dict, med_shifts_for_visit: list)
                     st.markdown("<div style='font-size:0.85rem; color:#5b6474; font-style:italic;'>No medication adjustments or prescriptions documented.</div>", unsafe_allow_html=True)
 
         with col_fu:
-            st.markdown('<div class="encounter-subheading">📅 Encounter Disposition / Follow-up</div>', unsafe_allow_html=True)
+            st.markdown('<div class="encounter-subheading">📅 Visit Disposition / Follow-up</div>', unsafe_allow_html=True)
             if fu_badges:
                 st.markdown(" ".join(fu_badges), unsafe_allow_html=True)
             else:
@@ -515,10 +468,10 @@ def unlinked_link_text(doc) -> str:
     """Short description of where an unlinked document probably belongs."""
     match = doc.get("likely_visit")
     if match:
-        return f"likely Encounter #{match['visit_index']} ({match['visit_date']})"
+        return f"likely Visit #{match['visit_index']} ({match['visit_date']})"
     candidates = doc.get("candidate_visits") or []
     if candidates:
-        return "possible Encounters " + ", ".join(f"#{c['visit_index']} ({c['visit_date']})" for c in candidates)
+        return "possible Visits " + ", ".join(f"#{c['visit_index']} ({c['visit_date']})" for c in candidates)
     return "no matching visit found"
 
 
@@ -551,7 +504,7 @@ def render_unlinked_documents(docs: list, heading: str = None, caption: str = No
             if refs:
                 label = "Likely linked visit" if match else "Possible visits (equally likely)"
                 lines = "<br>".join(
-                    f"Encounter #{r['visit_index']} · {html.escape(r['visit_date'])} · Visit {html.escape(r['visit_id'])}"
+                    f"Visit #{r['visit_index']} · {html.escape(r['visit_date'])} · ID {html.escape(r['visit_id'])}"
                     for r in refs)
                 st.markdown(
                     f'<div class="ai-insight-card"><div class="ai-tag" style="color:#104eb2;">🔗 {label}</div>'
@@ -630,41 +583,111 @@ _SNAPSHOT_CSS = """
 .snap-on { background:#029c89; border-color:#029c89; }
 .snap-alert { background:#d32f2f; border-color:#d32f2f; }
 .snap-axis { display:flex; justify-content:space-between; font-size:0.72rem; color:#5b6474; margin-left:238px; }
+.snap-guide { display:flex; gap:10px; align-items:baseline; padding:5px 11px; border-bottom:1px solid #edf1f7; font-size:0.85rem;
+              line-height:1.45; color:#1f2937; }
+.snap-guide b { white-space:nowrap; color:#0f2a5f; }
+.snap-status { white-space:nowrap; font-size:0.74rem; font-weight:700; padding:1px 8px; border-radius:999px;
+               background:#e8effb; color:#104eb2; border:1px solid #c9d8f3; }
+.snap-src { color:#5b6474; font-size:0.74rem; }
+.snap-guide.snap-draft { background:#fffbf0; }
+.snap-verify { white-space:nowrap; font-size:0.7rem; font-weight:700; padding:1px 7px; border-radius:4px; }
+.snap-verify.ok { background:#e7f6ec; color:#1b6b3a; border:1px solid #b9e2c6; }
+.snap-verify.draft { background:#fff3d6; color:#8a5a00; border:1px solid #f0d58f; }
+.snap-group { font-size:0.78rem; font-weight:700; color:#0f2a5f; margin:10px 0 4px; padding-left:2px; }
+.snap-group span { font-weight:500; color:#5b6474; }
+.snap-num { display:inline-block; min-width:20px; font-weight:700; color:#0f2a5f; margin-right:6px; }
+.snap-guide-box { margin:12px 0 4px; border:1px solid #dfe6f2; border-radius:8px; background:#fbfcfe; }
+.snap-guide-box > summary { cursor:pointer; padding:7px 12px; font-size:0.72rem; font-weight:700; letter-spacing:0.07em;
+                            text-transform:uppercase; color:#5b6474; }
+.snap-guide-box[open] > summary { border-bottom:1px solid #edf1f7; }
+.snap-guide-note { font-size:0.74rem; color:#8a5a00; padding:4px 11px 6px; }
+.snap-tiles { display:flex; flex-wrap:wrap; gap:8px; margin:4px 0 10px; }
+.snap-tile { flex:1 1 130px; min-width:120px; max-width:200px; border-radius:10px; padding:8px 10px; border:1px solid;
+             text-decoration:none !important; color:#1f2937 !important; display:block; }
+.snap-tile .t-label { font-size:0.7rem; font-weight:700; letter-spacing:0.05em; text-transform:uppercase; }
+.snap-tile .t-value { font-size:0.86rem; font-weight:650; margin-top:2px; line-height:1.3; }
+.snap-tile .t-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:5px; vertical-align:1px; }
+.snap-tile.red { background:#fdecec; border-color:#f3b4b4; } .snap-tile.red .t-dot { background:#d32f2f; } .snap-tile.red .t-label { color:#a61b1b; }
+.snap-tile.amber { background:#fff4e2; border-color:#f6cf94; } .snap-tile.amber .t-dot { background:#ff9800; } .snap-tile.amber .t-label { color:#a35a00; }
+.snap-tile.green { background:#e7f6ec; border-color:#b9e2c6; } .snap-tile.green .t-dot { background:#1b873f; } .snap-tile.green .t-label { color:#1b6b3a; }
+.snap-tile.grey { background:#f3f5f8; border-color:#d5ddeb; } .snap-tile.grey .t-dot { background:#9aa3b2; } .snap-tile.grey .t-label { color:#5b6474; }
+details.snap-flag { display:block; }
+details.snap-flag summary { cursor:pointer; list-style:none; }
+details.snap-flag summary::-webkit-details-marker { display:none; }
+.snap-more { float:right; font-size:0.72rem; color:#5b6474; margin-left:8px; }
+.snap-full { font-size:0.82rem; color:#3b4352; margin-top:6px; padding-top:6px; border-top:1px dashed #d5ddeb; }
+.snap-error { background:#f3f5f8; border-left:4px solid #9aa3b2; color:#5b6474; }
+.snap-error b { color:#5b6474; }
 </style>
 """
 
 
 def render_clinical_snapshot(snap: dict):
-    """One-screen summary: who the patient is, highlighted concerns, and a condition timeline."""
+    """Highlighted concerns, guideline context and a condition timeline (who the patient is: common header)."""
     if not snap:
         return
-    active = "".join(f'<span class="snap-chip">{html.escape(c)}</span>' for c in snap["active"]) or "none documented"
-    head = (f'<div class="snap-head"><b>{html.escape(snap.get("age_sex") or "Age/sex not recorded")}</b> · '
-            f'{snap["encounters"]} encounters ({html.escape(snap["span"])}) · Active: {active} · '
-            f'{snap["active_meds"]} medicines at latest visit</div>')
+    # The patient line (age/sex, visits, active conditions, medicines) is in the common header; the tiles are at the
+    # top of the AI tab (render_area_tiles).
+    head = ""
 
-    def _flag_row(f):
-        sig = f' <span class="snap-sig">— {html.escape(f["significance"])}</span>' if f.get("significance") else ""
-        return (f'<div class="snap-flag snap-{f["level"]}"><b>{html.escape(f["title"])}</b>'
-                f'<span>{html.escape(f["evidence"])}{sig}</span></div>')
+    def _flag_row(i, f, n=None):
+        """One short line; the full evidence (encounter numbers, explanation) opens below it."""
+        sig = f'<div class="snap-sig">{html.escape(f["significance"])}</div>' if f.get("significance") else ""
+        css = "snap-error" if f.get("record_error") else "snap-" + f["level"]
+        return (f'<details class="snap-flag {css}" id="snap-c{i}"{areas_attr([f.get("area")])}><summary><span class="snap-more">raw data ▾</span>'
+                + (f'<span class="snap-num">{n}</span>' if n else "") + f'{html.escape(f.get("summary") or f["title"])}</summary>'
+                f'<div class="snap-full"><b>{html.escape(f["title"])}</b> — {html.escape(f["evidence"])}{sig}</div></details>')
 
-    concerns = [f for f in snap["flags"] if f["level"] in ("high", "medium")]
+    order = snap.get("concerns")
+    if order is None:
+        order = [i for i, f in enumerate(snap["flags"]) if f["level"] in ("high", "verify", "medium")]
     info = [f for f in snap["flags"] if f["level"] == "info"]
     body = ""
-    if concerns:
-        body += '<div class="snap-sec">⚠️ Highlighted concerns</div>' + "".join(_flag_row(f) for f in concerns)
+    if order:
+        # Grouped by topic (medicines, BP, tests …), the group with the most serious concern first; numbered across groups.
+        groups = snap.get("concern_groups") or [{"label": "", "concerns": order}]
+        num = {i: n for n, i in enumerate((i for g in groups for i in g["concerns"]), 1)}
+        body += ('<div class="snap-sec">⚠️ Highlighted concerns — grouped by topic, most serious first · '
+                 'open a line for details</div>'
+                 + "".join((f'<div class="snap-group">{html.escape(g["label"])} <span>({len(g["concerns"])})</span></div>'
+                            if g["label"] else "")
+                           + "".join(_flag_row(i, snap["flags"][i], num[i]) for i in g["concerns"]) for g in groups))
     else:
         body += '<div class="snap-sec">✅ No high-risk pattern detected by the record rules</div>'
     if info:
         body += '<div class="snap-sec">Also noted</div>' + "".join(
             f'<span class="snap-info"><b>{html.escape(f["title"])}</b>: {html.escape(f["evidence"])}</span>' for f in info)
+    guide = snap.get("guideline") or {}
+    if guide.get("rows"):
+        profile = guide.get("profile") or {}
+        who = ", ".join(x for x in (f"{profile['age']} years" if profile.get("age") is not None else "",
+                                    profile.get("sex") or "", "pregnancy recorded" if profile.get("pregnancy") else "") if x)
+        def _guide_row(r):
+            if r.get("verified"):
+                badge = (f'<span class="snap-verify ok" title="Section verified by a clinician">✓ Verified · '
+                         f'{html.escape(str(r.get("verified_by") or ""))}, {html.escape(str(r.get("verified_on") or ""))}</span>')
+            else:
+                badge = ('<span class="snap-verify draft" title="Values not yet checked by a clinician; '
+                         'information only, not used in flags or the AI review">Draft · not verified</span>')
+            return (f'<div class="snap-guide{"" if r.get("verified") else " snap-draft"}"><b>{html.escape(r["topic"])}</b>'
+                    f'<span class="snap-status">{html.escape(r["status"])}</span>{badge}'
+                    f'<span>{html.escape(r["finding"])} <span class="snap-src">— {html.escape(r["source"])}</span></span></div>')
+
+        drafts = sum(1 for r in guide["rows"] if not r.get("verified"))
+        note = (f'<div class="snap-guide-note">{drafts} of {len(guide["rows"])} row(s) come from draft guideline sections '
+                'not yet verified by a clinician: information only, not used in the flags or the AI review.</div>'
+                if drafts else "")
+        # Collapsed by default: the doctor opens it when needed.
+        body += (f'<details class="snap-guide-box"><summary>Guideline context (ICMR / national) · {len(guide["rows"])} '
+                 f'row(s){" · cut-offs for " + html.escape(who) if who else ""}</summary>'
+                 + "".join(_guide_row(r) for r in guide["rows"]) + note + "</details>")
 
     dates = snap["dates"]
     rows = []
     for row in snap["timeline"]:
         on_class = "snap-alert" if row.get("kind") == "alert" else "snap-on"
         cells = "".join(
-            f'<span class="snap-cell {on_class if i in row["encounters"] else ""}" title="Encounter #{i} · {html.escape(d)}"></span>'
+            f'<span class="snap-cell {on_class if i in row["encounters"] else ""}" title="Visit #{i} · {html.escape(d)}"></span>'
             for i, d in enumerate(dates, 1))
         rows.append(f'<div class="snap-row"><span class="snap-label" title="{html.escape(row["label"])}">'
                     f'{html.escape(row["label"])}</span>{cells}</div>')
@@ -676,16 +699,18 @@ def render_clinical_snapshot(snap: dict):
             except ValueError:
                 return d
         # Column headers: encounter number and date above every column, so the grid reads like a table.
-        header = ('<div class="snap-row"><span class="snap-label"><b>Encounter →</b></span>'
+        header = ('<div class="snap-row"><span class="snap-label"><b>Visit →</b></span>'
                   + "".join(f'<span class="snap-colhead"><b>#{i}</b>{html.escape(_short_date(d))}</span>'
                             for i, d in enumerate(dates, 1)) + "</div>")
-        legend = ('<div class="snap-legend"><span><span class="snap-key" style="background:#029c89"></span>condition recorded at that encounter</span>'
+        legend = ('<div class="snap-legend"><span><span class="snap-key" style="background:#029c89"></span>condition recorded at that visit</span>'
                   '<span><span class="snap-key" style="background:#d32f2f"></span>alert (raised BP, missed follow-up, abnormal report)</span>'
                   '<span><span class="snap-key" style="background:#f1f4f9; border:1px solid #d5ddeb"></span>not recorded</span></div>')
-        timeline = ('<div class="snap-sec">Timeline across encounters</div><div class="snap-tl">'
+        timeline = ('<div class="snap-sec">Timeline across visits</div><div class="snap-tl">'
                     + header + "".join(rows) + legend + "</div>")
 
-    st.markdown(_SNAPSHOT_CSS + f'<div class="snap-card">{head}{body}{timeline}</div>', unsafe_allow_html=True)
+    meds = medicine_grid_html(snap.get("medicine_timeline") or [], dates, specialties=snap.get("specialties"))
+    st.html(_SNAPSHOT_CSS + f'<style>{MED_GRID_CSS}</style><div class="snap-card">{head}{body}{timeline}{meds}</div>'
+            f'<script>{MED_GRID_JS}</script>', unsafe_allow_javascript=True)
     st.caption("Rule-based from the record (no AI tokens). Values marked 'undated report' come from documents not linked to a visit.")
 
 

@@ -1,6 +1,9 @@
-"""Compact longitudinal clinical review generation through OpenRouter."""
+"""Patient-specific clinical review generation through OpenRouter.
 
-import json
+The model writes the narrative sections from the patient's evidence pack (clinical_insights), never from
+raw visits; review_rules then adds the record-based lab and evidence sections and checks every model line.
+"""
+
 import sys
 from pathlib import Path
 
@@ -13,23 +16,55 @@ if MODULE_DIR not in sys.path:
     sys.path.insert(0, MODULE_DIR)
 
 from review_facts import PROMPT_VERSION
-from medication_journey import compute_medication_journey
+from clinical_insights import build_insight_evidence, evidence_for_prompt
 from core.llm_client import complete as llm_complete
+from core.tracing import traced
 from review_rules import REQUIRED_ENDING, REVIEW_SECTIONS, sanitize_review as _sanitize, validate_model_review
 from core.config import flag as _flag
 
-SYSTEM_PROMPT = """You are a clinical-record review assistant. Analyze the patient's complete medical journey using only supplied records. Summarize the timeline, documented conditions, investigations, treatments, clinical progress, response, complications, and unresolved issues.
+SYSTEM_PROMPT = """You are a clinical-record review assistant writing a short, patient-specific clinical brief for the treating clinician. Use only the PATIENT EVIDENCE JSON supplied; it was extracted from this patient's record.
 
-**Prioritize red flags:** critical or worsening results, clinical deterioration, emergency indicators, persistent symptoms, abnormal trends, potential medication-related concerns, and gaps in follow-up. Explain their significance only when supported by evidence. Distinguish documented facts, uncertainties, and missing information. Highlight key turning points, conflicting records, and issues requiring clinician review. Never invent facts, diagnose, prescribe, recommend medication changes, or provide lifestyle advice.
+How to read the evidence:
+- conditions[].status: "confirmed", "working diagnosis" (provisional, recorded by the clinician), "known history" (stated in a complaint, e.g. K/C/O, or held on the patient's long-term condition list or health history), "suspected" (recorded with "?" or as under evaluation) or "document only" (in a scanned document, not the structured record). conditions[].long_term names the patient-level source (long-term condition list, health history): such a condition is current even when no visit records it, and must be mentioned.
+- possible_conditions: conditions that out-of-range results point to but the record never diagnoses.
+- abnormal_labs: out-of-range results with value, unit, reference range and its source, date, encounters (#n), earlier and later results of the same test, plain-language significance, related_conditions (the result is that recorded condition's control marker), related_medicines, also_relevant_to and in_range_context (same-day related tests that were within range).
+- medicines: name, class (what the medicine is, e.g. "NSAID (pain / anti-inflammatory)"), regimen, dates, whether prescribed at the latest visit, and "for" (the recorded condition the record links it to).
+- rule_flags: rule-based findings; kind is condition, pattern (how a problem behaves across visits: long-standing symptoms, not settling, visits closer together, diagnosis evolution), risk, medication, followup or data.
+- health_history: conditions and habits the patient reported in the intake health-history questionnaire, with any notes or quantity. This is patient-reported history, not a recorded diagnosis: write it as "reports a history of ..." unless conditions also records it.
+- clinician_notes: free text the clinician wrote at a visit (advice or impressions). A condition named only here is "noted by the clinician", not a recorded diagnosis.
+- recurring_complaints: symptoms raised at two or more visits, with the visit count.
+- latest_vitals: the latest structured readings. A value marked "impossible value" is an entry error: never interpret it.
+- followup_gaps, record_checks, timeline (#n is the encounter number).
 
-Use exactly these Markdown headings:
+Rules:
+- Every statement must come from the evidence. Quote values exactly with units; add the reference range in brackets, e.g. "(ref <range>)", for a value outside it. When a result appears at more than one encounter, say "reported twice" (or the count).
+- Diagnoses: use the recorded status (confirmed, working diagnosis, known history, suspected, documented only in a report). A possible condition is written as "may indicate ..." or "possible ..., not diagnosed in the record", with the results or symptoms that raise it. Never name a condition that is in neither conditions nor possible_conditions.
+- Medicines and conditions: say a medicine is for a condition only when that condition is in the medicine's "for". When "for" is empty, name the medicine with its class instead (e.g. "<medicine> (<class>)"); never guess what it treats.
+- For every out-of-range result, say in a few plain words what it can mean (use its significance), and add its in_range_context when present (e.g. "while <related test> is within range").
+- Medication considerations: say what a recorded medicine can do to this patient's findings or conditions (from rule_flags of kind medication, or the significance of a related result). Never recommend starting, stopping or changing a medicine or a dose.
+- Follow-up: say what the record shows as due or missing (out-of-range results not repeated, advised tests without results, missed follow-ups, conditions without their monitoring result).
+- Describe control exactly as the evidence shows it. Do not call a condition uncontrolled when its latest reading is within range. Hypertension control is shown by the BP readings; never call it unassessable when BP is recorded.
+- Mention a normal value only as context for a related abnormal one; never report normal vitals or normal results on their own. Do not repeat a point or a medicine list, and do not add generic statements that would fit any patient. No questions, no lifestyle advice, no generic education. Do not state that something is absent (no labs, no other abnormal findings, no long-term conditions) unless the evidence lists it as a gap. Never write the rule-flag levels (high, medium, info).
 
-## Overall Pattern
-## Key Insights
-## Review Points
-## Evidence
+Write a brief the clinician can read in under a minute to understand this patient's history and current condition. Use these five themes, in this order; leave a theme out only when the evidence has nothing for it:
+1. **Course:** age/sex, number of visits and the period, and what the patient presented with over time (recurring_complaints, and each visit's complaint from timeline, or the first and latest when there are many); a long-standing symptom's stated duration (rule_flags of kind pattern).
+2. **Conditions:** what is recorded at the latest visit, with its status and how many visits it spans; long-term and known history conditions; patient-reported health_history (including smoking, alcohol, drug allergies, surgeries and hospitalisations) where it bears on the conditions or findings; conditions not recorded since an earlier visit; course patterns from rule_flags of kind pattern.
+3. **Key findings:** the most important out-of-range results with what each can mean, whether the record diagnoses what they point to (possible_conditions), and symptoms or vitals flagged in rule_flags (high and medium level first).
+4. **Treatment:** medicine risks for this patient from rule_flags of kind medication first (dose above the usual maximum, a medicine that can worsen a recorded condition or reading); then medicines at the latest visit by name, with the recorded condition each is for or its class in brackets (never a list of classes alone); a chronic condition whose medicines stopped appearing; a recorded condition whose control marker is out of range on its medicine.
+5. **Gaps to check:** what the record shows as missing, due or inconsistent (followup_gaps, missed follow-ups, record_checks, impossible readings).
 
-Be concise, chronological where useful, and evidence-based. Include dates, values, units, and source references when available. Keep the review between 250 and 400 words. End with:
+Write analysis, not a summary: connect facts where the evidence links them (a result to its recorded condition and medicines, a symptom to a condition, a finding the record never diagnoses), and lead with what that link means, e.g. "<condition> above range: <result> despite <medicines>". Put the clinically most important point first in each theme.
+
+Format: start with the heading line "## Clinical Insights", then 4-5 bullets, one per theme. Inside a bullet, write 2-4 short points separated by "; ". A point is a phrase of at most 15 words, optionally starting with a short label and a colon ("Active: ...", "Recurring complaints: ..."). No full paragraphs, no filler words.
+
+## Clinical Insights
+- **Course:** <point>; <point>
+- **Conditions:** <point>; <point>
+- **Key findings:** <point>; <point>; <point>
+- **Treatment:** <point>; <point>
+- **Gaps to check:** <point>; <point>
+
+Each bullet at most 45 words; the whole list under 180 words. The full lab table and the source encounters are added from the record, so do not write them. End with this exact line:
 
 """ + REQUIRED_ENDING
 
@@ -45,62 +80,13 @@ if _flag("ENABLE_EXTERNAL_PROMPTS"):
 
 
 def build_ai_review_context(patient_data):
-    """Build a concise, duplicate-free summary from deterministic visit facts."""
-    journey = patient_data.get("_medication_journey_cache")
-    if journey is None:
-        journey = compute_medication_journey(patient_data)
-    shifts = {str(item.get("visit_id")): item for item in journey}
-    visits = []
-    for number, visit in enumerate(patient_data.get("visits", []), 1):
-        visit_id = str(visit.get("visit_id", number))
-        labs = visit.get("lab_results", []) or []
-        abnormal = [
-            [str(lab.get("test_name") or lab.get("name") or "")[:36], str(lab.get("value") or "")[:24], str(lab.get("status") or "")[:18]]
-            for lab in labs
-            if any(flag in str(lab.get("status") or "").casefold() for flag in ("abnormal", "high", "low"))
-        ]
-        changes = [str(change.get("text") or "")[:100] for change in shifts.get(visit_id, {}).get("changes", [])[:8]]
-        followups = [str(item.get("status") or "")[:20] for item in visit.get("followups", [])[:5]]
-        diagnosis = visit.get("db_confirmed_dx") or visit.get("confirmed_diagnosis") or visit.get("db_provisional_dx") or visit.get("provisional_diagnosis")
-        visits.append({
-            "id": visit_id,
-            "date": str(visit.get("visit_date") or "")[:10],
-            "cc": str(visit.get("db_chief_complaint") or visit.get("chief_complaint") or "")[:100],
-            "dx": str(diagnosis or "")[:100],
-            "med_changes": changes,
-            "abnormal_labs": abnormal[:8],
-            "normal_lab_count": sum(1 for lab in labs if str(lab.get("status") or "").casefold() == "normal"),
-            "followup": followups,
-            "discrepancy_count": len(visit.get("discrepancies", []) or []),
-            "doc_ids": [str(doc.get("doc_id")) for doc in (visit.get("documents") or [])[:8] if doc.get("doc_id") is not None],
-        })
-    payload = {"patient_id": patient_data.get("patient_id"), "total_visits": len(visits), "visits": visits}
-    unlinked = []
-    for doc in patient_data.get("unlinked_documents") or []:
-        cs = doc.get("clinical_summary") or {}
-        likely = doc.get("likely_visit")
-        unlinked.append({
-            "doc": str(doc.get("doc_id"))[-8:],
-            "visit": (f"likely visit {likely['visit_id']} ({likely['visit_date']})" if likely else
-                      "possible visits " + ", ".join(c["visit_date"] for c in doc.get("candidate_visits") or [])
-                      if doc.get("candidate_visits") else "not linked"),
-            "dx": str(cs.get("provisional_diagnosis") or cs.get("confirmed_diagnosis") or "")[:80],
-            "meds": (doc.get("medications_found") or [])[:6],
-            "abnormal_labs": [[str(l.get("test_name"))[:30], str(l.get("value"))[:12], str(l.get("status"))[:16]]
-                              for l in doc.get("lab_results") or []
-                              if any(f in str(l.get("status") or "").casefold() for f in ("abnormal", "high", "low"))][:6],
-            "normal_lab_count": sum(1 for l in doc.get("lab_results") or [] if str(l.get("status") or "").casefold() == "normal"),
-        })
-    while len(json.dumps(payload, ensure_ascii=False, separators=(",", ":"))) > 4000 and len(payload["visits"]) > 1:
-        payload["visits"].pop(0)
-    # Added after the visit budget so unlinked documents never push visits out.
-    if unlinked:
-        payload["documents_without_visit"] = unlinked
-    return payload
+    """The patient's evidence pack: conditions, medicines, abnormal labs, flags and follow-up gaps."""
+    return build_insight_evidence(patient_data)
 
 
+@traced(name="ai_review.build_prompt")
 def build_ai_review_prompt(patient_data, retry_feedback=None):
-    context = json.dumps(build_ai_review_context(patient_data), ensure_ascii=False, separators=(",", ":"))
+    context = evidence_for_prompt(build_ai_review_context(patient_data))
     feedback = f"\n\nCorrection required: {retry_feedback}" if retry_feedback else ""
     if _flag("ENABLE_EXTERNAL_PROMPTS"):
         try:
@@ -109,11 +95,17 @@ def build_ai_review_prompt(patient_data, retry_feedback=None):
             )
         except Exception:
             pass
-    return f"Return only the required four-section Markdown review. End with this exact line: {REQUIRED_ENDING}\nLONGITUDINAL PATIENT FACTS (JSON):\n{context}{feedback}"
+    return ("Write the Clinical Insights for this patient. End with this exact line: "
+            f"{REQUIRED_ENDING}\nPATIENT EVIDENCE (JSON):\n{context}{feedback}")
 
-def build_incremental_prompt(old_analysis_markdown, patient_data, prev_visit_count=0, previous_context=None):
-    """Build an update prompt containing only changed visits and prior review."""
-    current = json.dumps(build_ai_review_context(patient_data), ensure_ascii=False, separators=(",", ":"))
+
+@traced(name="ai_review.build_incremental_prompt")
+def build_incremental_prompt(old_analysis_markdown, patient_data, changed_visit_ids=()):
+    """Update prompt: the previous review, the full current evidence, and which encounters changed."""
+    current = evidence_for_prompt(build_ai_review_context(patient_data))
+    changed_ids = {str(v) for v in changed_visit_ids}
+    changed = ", ".join(f"#{i}" for i, v in enumerate(patient_data.get("visits") or [], 1)
+                        if str(v.get("visit_id")) in changed_ids) or "none identified"
     kept, words = [], 0
     for line in str(old_analysis_markdown or "").splitlines():
         count = len(line.split())
@@ -125,14 +117,18 @@ def build_incremental_prompt(old_analysis_markdown, patient_data, prev_visit_cou
     if _flag("ENABLE_EXTERNAL_PROMPTS"):
         try:
             return _load_prompt("review_incremental.md").format(
-                required_ending=REQUIRED_ENDING, previous=previous, current=current
+                required_ending=REQUIRED_ENDING, previous=previous, current=current, changed=changed
             )
         except Exception:
             pass
     return (
-        f"Update the review only when the supplied changed evidence warrants it. Preserve the required headings and exact ending: {REQUIRED_ENDING}\n\n"
-        f"PREVIOUS REVIEW:\n{previous}\n\nCHANGED VISIT FACTS (JSON):\n{current}"
+        "Update the review for new or changed encounters. Keep previous points that the current evidence still "
+        "supports, revise or drop those it no longer supports, and add what the changed encounters show. Write the "
+        f"same Clinical Insights section and end with this exact line: {REQUIRED_ENDING}\n\n"
+        f"PREVIOUS REVIEW:\n{previous}\n\nCHANGED ENCOUNTERS: {changed}\n\nPATIENT EVIDENCE (JSON):\n{current}"
     )
+
+
 def _call_openrouter(prompt, retry_feedback=None, patient_id=None):
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -147,13 +143,17 @@ def _call_openrouter(prompt, retry_feedback=None, patient_id=None):
 
 def _sanitize_review(markdown, patient_data=None):
     return _sanitize(markdown, patient_data or {})
+
+
+@traced(name="ai_review.analyze_full")
 def analyze_patient_with_ai(patient_data, retry_feedback=None):
     return _call_openrouter(build_ai_review_prompt(patient_data, retry_feedback),
                             patient_id=patient_data.get("patient_id"))
 
 
-def analyze_patient_incremental(old_markdown, patient_data, prev_visit_count=0, previous_context=None, retry_feedback=None):
-    prompt = build_incremental_prompt(old_markdown, patient_data, prev_visit_count, previous_context)
+@traced(name="ai_review.analyze_incremental")
+def analyze_patient_incremental(old_markdown, patient_data, changed_visit_ids=(), retry_feedback=None):
+    prompt = build_incremental_prompt(old_markdown, patient_data, changed_visit_ids)
     if retry_feedback:
         prompt += f"\n\nCorrection required: {retry_feedback}"
     return _call_openrouter(prompt, patient_id=patient_data.get("patient_id"))

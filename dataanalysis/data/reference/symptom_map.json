@@ -1,0 +1,224 @@
+{
+ "_doc": [
+  "Complaint phrase -> symptom -> body system (symptom_map.py). Entries are tried in order; the words an entry matches are consumed, so a later, broader entry cannot reuse them ('swelling on both eyes' is periorbital oedema, so its 'eyes' is never read as a visual symptom).",
+  "tags are the symptom tags the snapshot rules use (registry condition_symptoms, symptom_med_links, red_flag_symptoms). A rule fires on a complaint through its tags; its own pattern is only tried on the words no entry here explains.",
+  "Patterns are case-insensitive regular expressions; keep the most specific entries first."
+ ],
+ "symptoms": [
+  {
+   "symptom": "periorbital oedema",
+   "system": "renal / fluid",
+   "tags": [
+    "periorbital_oedema"
+   ],
+   "pattern": "periorbital\\w*|puffy\\s+(?:eye(?:lid)?s?|face)|(?:eye\\s*lids?|eyes?)\\s+(?:\\w+\\s+){0,2}?(?:swell\\w*|puff\\w*|o?edema)|(?:swell\\w*|puff\\w*|o?edema)\\s+(?:\\w+\\s+){0,3}?(?:eye\\s*lids?|eyes?)\\b",
+   "excluded_by": [
+    "injury"
+   ]
+  },
+  {
+   "symptom": "facial swelling",
+   "system": "renal / fluid",
+   "tags": [
+    "facial_swelling"
+   ],
+   "pattern": "(?:swell\\w*|puff\\w*|o?edema)\\s+(?:\\w+\\s+){0,2}?(?:face|facial)|(?:face|facial)\\s+(?:swell\\w*|puff\\w*)",
+   "excluded_by": [
+    "injury"
+   ]
+  },
+  {
+   "symptom": "blurred / reduced vision",
+   "system": "visual",
+   "tags": [
+    "visual_change"
+   ],
+   "pattern": "blur+\\w*(?:\\s+(?:of\\s+)?vis+i?on)?|(?:dim|poor|low|reduced|decreased|loss\\s+of|diminished|weak)\\s+(?:of\\s+)?(?:vis+i?on|eye\\s*sight)|double\\s+vision|diplopia|vis+i?on\\w*|eye\\s*sight"
+  },
+  {
+   "symptom": "eye surface symptom (redness, watering, itching, pain)",
+   "system": "eye (ocular surface)",
+   "tags": [
+    "eye_surface"
+   ],
+   "pattern": "(?:red(?:ness)?|water\\w*|itch\\w*|pain\\w*|burn\\w*|discharge|irritation|sticky)\\s+(?:\\w+\\s+){0,2}?eyes?|eyes?\\s+(?:\\w+\\s+){0,1}?(?:red(?:ness)?|water\\w*|itch\\w*|pain|burn\\w*|discharge|irritation)|conjunctiv\\w*"
+  },
+  {
+   "symptom": "leg / ankle swelling",
+   "system": "renal / fluid",
+   "tags": [
+    "leg_swelling"
+   ],
+   "pattern": "(?:swell\\w*|o?edema)\\s+(?:\\w+\\s+){0,3}?(?:legs?|ankles?|feet|foot)|(?:legs?|ankles?|feet|foot)\\s+(?:\\w+\\s+){0,2}?(?:swell\\w*|o?edema)|pedal\\s+o?edema",
+   "excluded_by": [
+    "injury"
+   ]
+  },
+  {
+   "symptom": "chest pain / tightness",
+   "system": "cardiovascular",
+   "tags": [
+    "chest_pain"
+   ],
+   "pattern": "chest\\s*(?:pain|tight\\w*|heav\\w*|discomfort)"
+  },
+  {
+   "symptom": "breathlessness",
+   "system": "respiratory / cardiovascular",
+   "tags": [
+    "breathlessness"
+   ],
+   "pattern": "breath(?:ing)?\\s*(?:difficulty|lessness)|breathless\\w*|dyspn\\w*|short(?:ness)?\\s*of\\s*breath"
+  },
+  {
+   "symptom": "palpitations",
+   "system": "cardiovascular",
+   "tags": [
+    "palpitations"
+   ],
+   "pattern": "palpitat\\w*"
+  },
+  {
+   "symptom": "dizziness",
+   "system": "neurological / cardiovascular",
+   "tags": [
+    "dizziness"
+   ],
+   "pattern": "dizz\\w*|giddi\\w*|light\\s*-?\\s*head\\w*|vertigo"
+  },
+  {
+   "symptom": "numbness / tingling",
+   "system": "neurological",
+   "tags": [
+    "neuropathic_sensory"
+   ],
+   "pattern": "numb\\w*|tingl\\w*|pins\\s*(?:and|&)\\s*needles"
+  },
+  {
+   "symptom": "dry mouth / excess thirst",
+   "system": "endocrine / metabolic",
+   "tags": [
+    "thirst_polyuria"
+   ],
+   "pattern": "dry(?:ness)?\\s+(?:\\w+\\s+){0,1}?mouth|excess\\w*\\s+thirst|polydips\\w*"
+  },
+  {
+   "symptom": "urinary frequency",
+   "system": "renal / urinary",
+   "tags": [
+    "urinary_symptoms",
+    "thirst_polyuria"
+   ],
+   "pattern": "frequen\\w*\\s+(?:of\\s+)?(?:urin\\w*|mictur\\w*)|urinary\\s+frequen\\w*|frequent\\s+urin\\w*|polyuria"
+  },
+  {
+   "symptom": "burning urination",
+   "system": "renal / urinary",
+   "tags": [
+    "urinary_symptoms"
+   ],
+   "pattern": "burning\\s+(?:micturition|urination|urine)|dysuria"
+  },
+  {
+   "symptom": "weakness / fatigue",
+   "system": "general",
+   "tags": [
+    "weakness_fatigue"
+   ],
+   "pattern": "(?:general\\w*\\s+)?weak\\w*|fatigue|tired\\w*|lethargy"
+  },
+  {
+   "symptom": "abdominal pain",
+   "system": "gastrointestinal",
+   "tags": [
+    "abdominal_pain"
+   ],
+   "pattern": "(?:abdom\\w*|stomach|epigastr\\w*)\\s*(?:\\w+\\s+){0,2}?(?:pain|ache|discomfort|heaviness)|heaviness\\s+in\\s+abdomen"
+  },
+  {
+   "symptom": "acidity / heartburn",
+   "system": "gastrointestinal",
+   "tags": [
+    "acidity_heartburn"
+   ],
+   "pattern": "acidity|heart\\s*burn|reflux|gastritis"
+  },
+  {
+   "symptom": "constipation / loose motions / vomiting",
+   "system": "gastrointestinal",
+   "tags": [
+    "vomiting_diarrhoea"
+   ],
+   "pattern": "constipat\\w*|loose\\s+motions?|diarrh\\w*|vomit\\w*|nausea"
+  },
+  {
+   "symptom": "loss of appetite",
+   "system": "general",
+   "tags": [],
+   "pattern": "(?:loss\\s+of|poor|decreased)\\s+appetite"
+  },
+  {
+   "symptom": "headache",
+   "system": "neurological",
+   "tags": [
+    "headache"
+   ],
+   "pattern": "head\\s*ache|headache"
+  },
+  {
+   "symptom": "fever",
+   "system": "general",
+   "tags": [
+    "fever"
+   ],
+   "pattern": "fever|pyrexia|chills"
+  },
+  {
+   "symptom": "cough / cold",
+   "system": "respiratory",
+   "tags": [
+    "cough_cold"
+   ],
+   "pattern": "cough\\w*|cold|running\\s+nose|sneez\\w*|wheez\\w*"
+  },
+  {
+   "symptom": "skin rash / itching / patches",
+   "system": "skin",
+   "tags": [
+    "itching_rash"
+   ],
+   "pattern": "itch\\w*|ithc\\w*|rash\\w*|(?:red|dark|white|black\\w*)\\s+patch\\w*|patch\\w*|eczema|fungal\\s+infection|ringworm|tinea|blackish"
+  },
+  {
+   "symptom": "musculoskeletal pain / stiffness / cramps",
+   "system": "musculoskeletal",
+   "tags": [
+    "musculoskeletal_pain"
+   ],
+   "pattern": "(?:back|neck|joint|knee|shoulder|hip|legs?|hands?|calf|ankle|foot|body|muscles?|muscular|finger|thigh)\\w*\\s+(?:\\w+\\s+){0,3}?(?:pain|ache|stiff\\w*|stuck)|body\\s*ache|myalgia|cramps?|nerve\\s+strains?|pain\\s+in\\s+\\w+|walking\\s+difficulty"
+  },
+  {
+   "symptom": "sleep disturbance / restlessness",
+   "system": "mental health / sleep",
+   "tags": [
+    "mood_sleep"
+   ],
+   "pattern": "(?:loss\\s+of|poor|no)\\s+sleep|insomnia|restless\\w*"
+  },
+  {
+   "symptom": "raised BP (reported)",
+   "system": "cardiovascular",
+   "tags": [],
+   "pattern": "bp\\s+(?:raised|high)|high\\s+bp|for\\s+bp"
+  },
+  {
+   "symptom": "fall / injury",
+   "system": "injury",
+   "tags": [
+    "injury"
+   ],
+   "pattern": "fall\\w*|injur\\w*|trauma\\w*|sprain\\w*|twist\\w*|hit\\s+by|accident\\w*|stuck"
+  }
+ ],
+ "_excluded_by_doc": "excluded_by: symptom tags that, recorded at the same visit, explain this symptom another way (swelling after a fall is an injury, not fluid); rules then do not read it as this concept."
+}

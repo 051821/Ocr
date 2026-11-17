@@ -148,8 +148,8 @@ def _build_graph_payload(patient_data):
             "summary": findings[:800] or "No structured findings extracted",
             "likely_visit_id": f"{patient_id}:{match['visit_id']}" if match.get("visit_id") else None,
             "candidate_visit_ids": [f"{patient_id}:{c['visit_id']}" for c in doc.get("candidate_visits") or []],
-            "link": (f"likely Encounter #{match['visit_index']} ({match['visit_date']})" if match else
-                     "possible Encounters " + ", ".join(f"#{c['visit_index']} ({c['visit_date']})" for c in doc["candidate_visits"])
+            "link": (f"likely Visit #{match['visit_index']} ({match['visit_date']})" if match else
+                     "possible Visits " + ", ".join(f"#{c['visit_index']} ({c['visit_date']})" for c in doc["candidate_visits"])
                      if doc.get("candidate_visits") else "no matching visit found"),
             "match_reasons": "; ".join((match or (doc.get("candidate_visits") or [{}])[0]).get("reasons", [])),
         })

@@ -1,0 +1,118 @@
+{
+  "_doc": [
+    "Configurable thresholds for vitals plausibility, data-entry errors and BMI (clinical_snapshot.py).",
+    "A reading outside its plausibility range is a recording or unit error: it is reported under data quality only, never as a clinical finding, and is not used by any rule.",
+    "Ranges are for adults seen as outpatients."
+  ],
+  "vital_plausibility": {
+    "Temperature": {
+      "fahrenheit": [
+        95,
+        108
+      ],
+      "celsius": [
+        35,
+        42.2
+      ],
+      "low_band_fahrenheit_from": 93,
+      "_note": "Below 95 F or above 108 F in an outpatient is a measuring or entry error. 93-95 F is reported as 'Temperature below 95 F'; anything else outside the range as an impossible reading."
+    },
+    "BP": {
+      "systolic": [
+        60,
+        260
+      ],
+      "diastolic": [
+        30,
+        160
+      ],
+      "systolic_above_diastolic": true
+    },
+    "SpO2": [
+      70,
+      100
+    ],
+    "Pulse": [
+      30,
+      220
+    ],
+    "Weight": [
+      2,
+      300
+    ],
+    "Height": [
+      40,
+      230
+    ]
+  },
+  "weight_entry_error": {
+    "_note": "A weight that goes A -> B -> about A within window_days is an entry error at B, not a clinical change: B differs from A by at least min_excursion_pct and the return is within return_within_pct of A.",
+    "window_days": 30,
+    "min_excursion_pct": 5,
+    "return_within_pct": 2
+  },
+  "height_entry_error": {
+    "_note": "An adult's height does not change: readings spread by more than max_variation_cm are an entry error.",
+    "adult_from_age": 18,
+    "max_variation_cm": 3
+  },
+  "bmi": {
+    "_note": "Population cut-offs for the BMI flag. default_population is used unless BMI_POPULATION is set. The WHO category is always shown alongside.",
+    "default_population": "asian_indian",
+    "populations": {
+      "asian_indian": {
+        "label": "Asian Indian",
+        "underweight_below": 18.5,
+        "overweight_from": 23.0,
+        "obese_from": 25.0,
+        "source": "Consensus BMI cut-offs for Asian Indians (Misra et al., 2009), as used in ICMR-INDIAB"
+      },
+      "who": {
+        "label": "WHO",
+        "underweight_below": 18.5,
+        "overweight_from": 25.0,
+        "obese_from": 30.0,
+        "source": "WHO BMI classification"
+      }
+    }
+  },
+  "followup_recheck": {
+    "_note": "A follow-up the source system marks MISSED counts as attended (off-date) when the patient had any other visit within attended_within_days of the due date (either side). Override with FOLLOWUP_TOLERANCE_DAYS.",
+    "attended_within_days": 7
+  },
+  "cause_timing": {
+    "_note": "A medicine is linked to a symptom only if one of its courses (start to start + duration) overlaps the window_days before the visit where the symptom is recorded.",
+    "symptom_window_days": 30
+  },
+  "brief": {
+    "_note": "Key findings: every high and verify flag, then at most max_medium medium flags (most important first); the rest stay in the snapshot. Info and data-quality items are not Key findings (BMI excepted). Conditions: recorded working / suspected diagnoses the brief omits are added back, up to max_other_conditions. Key findings hold at most max_key_findings points in all (high first). Final format (clinical_insights.finalise_brief): Key findings ordered current high, current medium, then past; one point per clinical problem; at most max_key_findings; each clipped to key_finding_words; dates as '14 Aug'; Treatment rebuilt from the record without risk statements; Gaps keep only items Key findings do not state.",
+    "max_medium": 5,
+    "max_other_conditions": 4,
+    "max_key_findings": 6,
+    "key_finding_words": 22
+  },
+  "conflicting_values": {
+    "_note": "A vital the structured record and a document give differently is 'conflicting' (out of every rule and test suggestion, reported under data quality) when they differ by more than its absolute tolerance (units of the vital), or by more than tolerance_pct for vitals without one.",
+    "tolerance_pct": 5,
+    "absolute": {
+      "Temperature": 1.0,
+      "BP": 10,
+      "Pulse": 10,
+      "SpO2": 2,
+      "Weight": 2,
+      "Height": 3
+    }
+  },
+  "summary_tiers": {
+    "_note": "Two tiers of the AI Analysis & Summary (summary_tiers.py). Quick: one bedside screen, relative to the latest visit; each list capped, the overflow counted in hidden_counts (never dropped silently). Detailed: everything, each fact once. Word limits apply to AI and rule text alike.",
+    "headline_words": 35,
+    "line_words": 25,
+    "max_now": 6,
+    "max_earlier": 4,
+    "max_tests": 5,
+    "max_treatment_items": 10,
+    "recent_stop_days": 90,
+    "stale_latest_days": 183,
+    "default_view": "quick"
+  }
+}

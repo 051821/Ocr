@@ -5,12 +5,14 @@
 from .ai_analysis_csv import (
     FULL_RERUN_THRESHOLD,
     compute_source_hash,
+    get_doctor_settings,
     get_llm_cache,
     get_patient_row,
     get_top_questions,
     purge_expired_cache,
     purge_patient,
     record_chat_question,
+    set_doctor_default_view,
     set_llm_cache,
     upsert_ai_analysis,
 )
@@ -18,6 +20,8 @@ from .ai_analysis_csv import (
 __all__ = [
     "FULL_RERUN_THRESHOLD",
     "compute_source_hash",
+    "get_doctor_settings",
+    "set_doctor_default_view",
     "get_llm_cache",
     "get_patient_row",
     "get_top_questions",

@@ -2,10 +2,11 @@
 import hashlib
 import json
 import re
+from pathlib import Path
 
 from core.config import flag as _flag
 
-PROMPT_VERSION = "clinical_ai_review_v8"
+PROMPT_VERSION = "clinical_ai_review_v25"  # v25: + quick tier (prompts/review_quick.md)
 
 # When ENABLE_EXTERNAL_PROMPTS is on, swap to the file-derived hash so that
 # any prompt edit automatically invalidates the review cache.
@@ -17,6 +18,26 @@ if _flag("ENABLE_EXTERNAL_PROMPTS"):
         pass  # keep the static fallback
 
 
+def _guideline_version():
+    """The guideline values version (and whether drafts run): a change regenerates cached reviews."""
+    path = Path(__file__).resolve().parent / "data" / "reference" / "condition_registry.json"
+    try:
+        guidelines = json.loads(path.read_text(encoding="utf-8")).get("guidelines", {})
+    except (OSError, ValueError):
+        return ""
+    version = guidelines.get("version", "")
+    if not version:
+        return ""
+    # Verifying (or revoking) a section changes what the AI reads, so it changes the version too.
+    verified = sorted(f"{name}:{rule.get('verified_by')}:{rule.get('verified_on')}" for name, rule in guidelines.items()
+                      if isinstance(rule, dict) and rule.get("verified") and rule.get("verified_by") and rule.get("verified_on"))
+    signature = "-verified-" + hashlib.sha1("|".join(verified).encode()).hexdigest()[:8] if verified else ""
+    return f"+guidelines-{version}{signature}" + ("-draft" if _flag("ENABLE_DRAFT_GUIDELINES") else "")
+
+
+PROMPT_VERSION += _guideline_version()
+
+
 def _normalized_medication(value):
     text = re.sub(r"\s+", " ", str(value or "")).strip().casefold()
     text = re.sub(r"(?i)^(?:tab(?:let)?|cap(?:sule)?|inj(?:ection)?|syp(?:rup)?)\.?\s+", "", text)
@@ -25,7 +46,7 @@ def _normalized_medication(value):
 
 
 def _canonical_hash(value):
-    payload = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    payload = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
     return hashlib.blake2b(payload.encode("utf-8"), digest_size=16).hexdigest()
 
 
@@ -52,7 +73,14 @@ def build_review_facts(patient_data):
                 "name": re.sub(r"\s+", " ", str(lab.get("test_name") or lab.get("name") or "")).strip().casefold(),
                 "value": lab.get("value"),
                 "status": lab.get("status"),
+                "reference": lab.get("reference"),
             })
+        # The review reads prescriptions and vitals directly, so they are part of the source.
+        medications = sorted(
+            " ".join([_normalized_medication(m.get("name"))]
+                     + [str(m.get(f) or "").strip() for f in ("dosage", "frequency", "duration")]).strip()
+            for m in visit.get("db_medications", []) or []
+        )
         followups = sorted(
             str(item.get("status") or "") for item in visit.get("followups", []) or []
         )
@@ -67,6 +95,8 @@ def build_review_facts(patient_data):
             "provisional_diagnosis": visit.get("db_provisional_dx") or visit.get("provisional_diagnosis"),
             "confirmed_diagnosis": visit.get("db_confirmed_dx") or visit.get("confirmed_diagnosis"),
             "medication_changes": changes,
+            "medications": medications,
+            "vitals": visit.get("db_vitals_json") or {},
             "labs": labs,
             "followup_status": followups,
             "discrepancy_count": len(visit.get("discrepancies", []) or []),
@@ -98,6 +128,12 @@ def visit_hashes(patient_data, facts=None):
     unlinked = unlinked_facts(patient_data)
     if unlinked:
         hashes["unlinked_documents"] = _canonical_hash(unlinked)
+    history = patient_data.get("health_history_present")
+    if history:
+        hashes["health_history"] = _canonical_hash(history)
+    long_term = patient_data.get("long_term_conditions")
+    if long_term:
+        hashes["long_term_conditions"] = _canonical_hash(long_term)
     return hashes
 
 

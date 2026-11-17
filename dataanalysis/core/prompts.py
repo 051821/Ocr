@@ -17,6 +17,7 @@ _REVIEW_FILES = [
     "review_system.md",
     "review_user.md",
     "review_incremental.md",
+    "review_quick.md",
 ]
 _CHAT_FILES = [
     "shared_policy.md",

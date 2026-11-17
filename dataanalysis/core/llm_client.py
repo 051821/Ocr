@@ -19,6 +19,7 @@ try:
     from storage.ai_analysis_csv import get_llm_cache, set_llm_cache
 except ImportError:
     from ..storage.ai_analysis_csv import get_llm_cache, set_llm_cache
+from core.tracing import annotate_run, llm_outputs, traced
 
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,7 @@ def _passes(validate, content):
         return False
 
 
+@traced(name="openrouter.complete", run_type="llm", process_outputs=llm_outputs)
 def complete(messages, task, api_key=None, model=None, temperature=0.1, max_tokens=None, cache=True,
              patient_id=None, validate=None):
     """Return a cached or generated response with model and usage metadata.
@@ -68,6 +70,8 @@ def complete(messages, task, api_key=None, model=None, temperature=0.1, max_toke
     max_tokens = int(max_tokens or MAX_TOKENS[task])
     models = active_models
     cache_key = _cache_key(task, messages, models, temperature, max_tokens)
+    annotate_run({"ls_provider": "openrouter", "task": task, "patient_id": patient_id,
+                  "ls_temperature": temperature, "ls_max_tokens": max_tokens}, tags=[f"task:{task}"])
     if cache:
         try:
             cached = get_llm_cache(cache_key)
@@ -76,6 +80,7 @@ def complete(messages, task, api_key=None, model=None, temperature=0.1, max_toke
                 # Entries written before validation existed may be invalid; regenerate those.
                 if _passes(validate, result.get("content")):
                     result["cache_hit"] = True
+                    annotate_run({"ls_model_name": result.get("model"), "cache_hit": True}, tags=["cache_hit"])
                     return result
         except Exception as exc:
             logger.warning("LLM cache read failed: %s", exc)
@@ -91,7 +96,9 @@ def complete(messages, task, api_key=None, model=None, temperature=0.1, max_toke
                     OPENROUTER_URL,
                     headers=headers,
                     json={"model": candidate, "messages": messages,
-                          "temperature": temperature, "max_tokens": max_tokens},
+                          "temperature": temperature, "max_tokens": max_tokens,
+                          # Ask OpenRouter to return the billed cost in usage.cost.
+                          "usage": {"include": True}},
                     timeout=60,
                 )
                 response.raise_for_status()
@@ -103,10 +110,12 @@ def complete(messages, task, api_key=None, model=None, temperature=0.1, max_toke
                 usage = body.get("usage") or {}
                 truncated = choices[0].get("finish_reason") == "length"
                 logger.info(
-                    "llm task=%s model=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s",
+                    "llm task=%s model=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s cost=%s",
                     task, candidate, usage.get("prompt_tokens"),
-                    usage.get("completion_tokens"), usage.get("total_tokens"),
+                    usage.get("completion_tokens"), usage.get("total_tokens"), usage.get("cost"),
                 )
+                annotate_run({"ls_model_name": candidate, "cache_hit": False, "attempt": attempt + 1,
+                              "truncated": truncated, "fallback_model": candidate != models[0]})
                 result = {"content": content, "model": candidate, "usage": usage,
                           "cache_hit": False, "truncated": truncated}
                 if truncated:

@@ -499,7 +499,8 @@ def _collect_labs(visits, unlinked):
         rows += [(lab, idx, _date(v)) for lab in v.get("lab_results") or []]
     for doc in unlinked:
         likely = (doc.get("likely_visit") or {}).get("visit_date") or ""
-        rows += [(lab, None, str(likely)[:10]) for lab in doc.get("lab_results") or []]
+        # A report's own date (read from the document) dates its results; else the likely visit's date.
+        rows += [(lab, None, lab.get("report_date") or str(likely)[:10]) for lab in doc.get("lab_results") or []]
     results, unverified, not_evaluated = {}, [], 0
     for lab, idx, date in rows:
         status = str(lab.get("status") or "")
@@ -535,6 +536,9 @@ def _collect_labs(visits, unlinked):
                 "critical": status.startswith("Critical"), "date": date, "encounters": [],
                 "as_written": _as_written(lab.get("note")),
                 "linked_to_visit": idx is not None,
+                # Two dates: the report's own (read from the document) and the visit it is filed under.
+                "report_date": lab.get("report_date") or "",
+                "visit_date": date if idx is not None else "",
             }
         if idx:
             entry["encounters"].append(idx)
@@ -949,11 +953,23 @@ def evidence_for_prompt(evidence):
 
 # ── Markdown ────────────────────────────────────────────────────────────────
 
+def lab_dates_text(g):
+    """'report 2026-05-26, visit 2026-06-03' when the report gives its own date; else the result's date as before
+    ('2026-06-03'), or 'date unknown'."""
+    report, visit = g.get("report_date") or "", g.get("visit_date") or ""
+    if report and visit and report != visit:
+        return f"report {report}, visit {visit}"
+    if report:
+        return f"report {report}" + (" (same day as the visit)" if visit else "")
+    return g.get("date") or "date unknown"
+
+
 def _lab_line(g):
     ref = f"reference {g['reference']}" + (f" ({g['reference_source']})" if g["reference_source"] != "report" else "") \
         if g["reference"] else "no reference range given"
-    when = g["date"] or "date unknown"
-    where = f", {g['encounters']}" if g["encounters"] else ("" if g["date"] else ", report not linked to a visit")
+    when = lab_dates_text(g)
+    where = f", {g['encounters']}" if g["encounters"] else ("" if g["date"] and not g.get("report_date")
+                                                             else ", report not linked to a visit")
     line = f"- **{g['test']} {g['value']}** ({g['status']}; {ref}; {when}{where})"
     if g["significance"]:
         line += f": {g['significance']}"

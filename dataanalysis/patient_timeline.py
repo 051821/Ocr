@@ -1,7 +1,7 @@
 """
 patient_timeline.py
 
-Formats patient history date-wise for AI longitudinal analysis & dashboard display.
+Formats patient history date-wise for AI longitudinal analysis & dashboard display (GET /patients/{id}/timeline).
 
 Rules this module enforces:
   - Visits are grouped under their DATE. If more than one visit shares a
@@ -14,16 +14,73 @@ Rules this module enforces:
   - If a visit has more than one document, each document is kept fully
     separate with its own mini clinical summary, labeled Document 1,
     Document 2, etc. Documents are never merged together.
+  - Nothing is shown as something it is not: a prescription line the OCR read as a lab result is not listed as a lab;
+    a vital an outpatient could not have is marked as an entry error; a vital the record and a document give
+    differently is shown with both values, not dropped; a document with nothing readable says so.
+  - The prescriber is named by specialization only, never by name.
 """
+from core.encounters import dose_not_specified, unclear_dose
 
 
-def _format_document_block(doc, indent="    "):
+def _medicine_line_checker(visit):
+    """is_medicine_line for this visit: a 'Not Evaluated' lab row that is a prescription line (dose form, or the
+    name of a medicine prescribed at this visit)."""
+    from clinical_snapshot import _first_word, is_medicine_line
+    words = {_first_word(m.get("name")) for m in visit.get("db_medications") or []}
+    return lambda lab: is_medicine_line(lab, words)
+
+
+def _vital_text(label, value):
+    from clinical_snapshot import _celsius_note, vital_implausible
+    if not vital_implausible(label, value):
+        return f"{label}: {value}"
+    return f"{label}: {value} (implausible{_celsius_note(label, value) or ' — likely an entry error'}; not used)"
+
+
+def _clean(text):
+    """Record text as written, without the trailing comma / semicolon the entry form often leaves."""
+    return str(text).strip().rstrip(",;").strip() if text else ""
+
+
+def _age_sex(text):
+    """(age in years, 'male' / 'female') from '36 years / Female', missing parts None."""
+    import re
+    age = re.search(r"(\d{1,3})\s*(?:y|yr|yrs|year|years)?\b", str(text or ""), re.I)
+    sex = re.search(r"\b(male|female|m|f)\b", str(text or ""), re.I)
+    return (int(age.group(1)) if age else None,
+            {"m": "male", "f": "female"}.get(sex.group(1).casefold(), sex.group(1).casefold()) if sex else None)
+
+
+def _document_checks(doc, visit_no, context):
+    """Notes that a document may not belong where it is: another patient's age / sex, or another visit's complaint
+    (often an earlier prescription brought to this visit)."""
+    notes = []
+    cs = doc.get("clinical_summary") or {}
+    label = doc.get("document_label", "Document")
+    d_age, d_sex = _age_sex(cs.get("age_sex"))
+    p_age, p_sex = _age_sex(context.get("age_sex"))
+    if (d_sex and p_sex and d_sex != p_sex) or (d_age is not None and p_age is not None and abs(d_age - p_age) > 2):
+        notes.append(f"{label}: age/sex on the document ({cs.get('age_sex')}) differs from the patient's record "
+                     f"({context.get('age_sex')}); check it belongs to this patient before using it.")
+    cc = _clean(cs.get("chief_complaint")).casefold()
+    own = context["complaints"].get(visit_no, "")
+    other = [n for n, c in context["complaints"].items() if n != visit_no and c and c == cc]
+    if cc and other and cc != own:
+        n = other[0]
+        notes.append(f"{label}: its complaint matches visit #{n} ({context['dates'].get(n, 'date unknown')}), not this "
+                     f"visit; it may be that visit's prescription brought again.")
+    return notes
+
+
+def _format_document_block(doc, indent="    ", is_medicine=lambda lab: False):
     """Render one document's own extraction as a self-contained block."""
     lines = []
     label = doc.get("document_label", "Document")
     cs = doc.get("clinical_summary") or {}
 
-    lines.append(f"{indent}--- {label} ---")
+    if doc.get("document_date"):  # read from the document itself (label + date only)
+        lines.append(f"{indent}Report date ({label}): {doc['document_date']}"
+                     + (f" (written as '{doc['document_date_label']}')" if doc.get("document_date_label") else ""))
 
     age_sex = cs.get("age_sex")
     if age_sex:
@@ -47,11 +104,16 @@ def _format_document_block(doc, indent="    "):
     if symptoms:
         lines.append(f"{indent}Symptoms ({label}): {', '.join(symptoms)}")
 
+    vitals = [v for v in cs.get("vitals") or [] if v.get("label") and v.get("value")]
+    if vitals:
+        lines.append(f"{indent}Vitals ({label}): " + ", ".join(_vital_text(v["label"], v["value"]) for v in vitals))
+
     meds = doc.get("medications_found") or []
     if meds:
         lines.append(f"{indent}Medicines — from {label} (document, separate from prescription DB): {', '.join(meds)}")
 
-    labs = doc.get("lab_results") or []
+    all_labs = doc.get("lab_results") or []
+    labs = [l for l in all_labs if not is_medicine(l)]
     if labs:
         lines.append(f"{indent}Lab Results ({label}):")
         for l in labs:
@@ -60,20 +122,58 @@ def _format_document_block(doc, indent="    "):
             ref = l.get("reference", "")
             status = l.get("status", "")
             lines.append(f"{indent}  • {t_name}: {val} (Ref: {ref}) [{status}]")
+    if len(labs) < len(all_labs):
+        lines.append(f"{indent}Note ({label}): {len(all_labs) - len(labs)} prescription line(s) the scan read as lab "
+                     f"results; not lab tests, not listed.")
 
     fu = cs.get("follow_up")
     if fu:
         lines.append(f"{indent}Follow-up ({label}): {fu}")
 
     stats = cs.get("extraction_stats") or {}
+    if not lines:
+        garbled = stats.get("garbled_lines") or 0
+        lines.append(f"{indent}No clinical fields could be read from {label}"
+                     + (f" ({garbled} unreadable line(s))." if garbled else "."))
     if stats.get("ai_assisted"):
         lines.append(f"{indent}[Note: some fields in {label} were AI-assisted — "
                       f"not caught by pattern matching, verify against source.]")
 
+    return [f"{indent}--- {label} ---"] + lines
+
+
+def _medicine_text(m):
+    """'LOBET GM CREAM — 1-0-1 · After Food · 10 days', with the zero-dose cases said plainly."""
+    parts = [str(x).strip() for x in (m.get("dosage"), m.get("frequency"), m.get("duration")) if str(x or "").strip()]
+    text = f"{m.get('name', 'Unknown')}" + (f" — {' · '.join(parts)}" if parts else "")
+    if unclear_dose(m):
+        text += " (0-0-0 with no duration: no dose or course stated; not counted as taken)"
+    elif dose_not_specified(m):
+        text += " (dose not entered)"
+    return text
+
+
+def _followup_lines(followups, indent):
+    """One line per scheduled date: every status / resolution written for that date (two prescriptions of a visit
+    can each schedule the same follow-up)."""
+    by_date = {}
+    for fu in followups:
+        by_date.setdefault(str(fu.get("scheduled_date") or "?")[:10], []).append(fu)
+    statuses = [next((f.get("status") for f in fus if f.get("status") == "MISSED"), fus[0].get("status", ""))
+                for fus in by_date.values()]
+    lines = [f"{indent}Follow-up Schedule ({len(by_date)} scheduled | {statuses.count('COMPLETED')} completed | "
+             f"{statuses.count('MISSED')} missed):"]
+    for date, fus in by_date.items():
+        status = " / ".join(dict.fromkeys(str(f.get("status") or "?") for f in fus))
+        emerg = " 🚨 EMERGENCY" if any(f.get("is_emergency") for f in fus) else ""
+        res = "; ".join(dict.fromkeys(
+            str(f["resolution"]) + (f" [{f['resolution_notes']}]" if f.get("resolution_notes") else "")
+            for f in fus if f.get("resolution")))
+        lines.append(f"{indent}  • {date} | {status}{emerg}" + (f" → {res}" if res else ""))
     return lines
 
 
-def _format_visit_block(visit, indent="  "):
+def _format_visit_block(visit, indent="  ", visit_no=None, context=None):
     """Render one visit: DB fields (always) + its document(s) or a clear
     'no supporting document' notice."""
     lines = []
@@ -84,9 +184,13 @@ def _format_visit_block(visit, indent="  "):
     db_prov = visit.get("db_provisional_dx") or visit.get("provisional_diagnosis")
     db_conf = visit.get("db_confirmed_dx") or visit.get("confirmed_diagnosis")
 
-    lines.append(f"{indent}Chief Complaint (database): {db_cc or 'Not Documented'}")
-    lines.append(f"{indent}Provisional Diagnosis (database): {db_prov or 'Not Documented'}")
-    lines.append(f"{indent}Confirmed Diagnosis (database): {db_conf or 'Not Documented'}")
+    lines.append(f"{indent}Chief Complaint (database): {_clean(db_cc) or 'Not Documented'}")
+    lines.append(f"{indent}Provisional Diagnosis (database): {_clean(db_prov) or 'Not Documented'}")
+    lines.append(f"{indent}Confirmed Diagnosis (database): {_clean(db_conf) or 'Not Documented'}")
+
+    specs = visit.get("prescriber_specializations") or []
+    if specs:
+        lines.append(f"{indent}Prescribed by (specialization): {', '.join(specs)}")
 
     instructions = visit.get("db_instructions") or []
     if instructions:
@@ -94,18 +198,19 @@ def _format_visit_block(visit, indent="  "):
 
     vitals = visit.get("db_vitals_rows") or []
     if vitals:
-        v_str = ", ".join(f"{v['label']}: {v['value']}" for v in vitals)
-        lines.append(f"{indent}Vitals (database): {v_str}")
+        lines.append(f"{indent}Vitals (database): " + ", ".join(_vital_text(v["label"], v["value"]) for v in vitals))
+    # Readings the record and a document give differently: both shown, neither used by the rules (data_quality).
+    for c in visit.get("conflicting_vitals") or []:
+        doc = c.get("document_value")
+        doc = f"{doc:g}" if isinstance(doc, (int, float)) else doc
+        lines.append(f"{indent}Vitals conflict: {c.get('label')} {c.get('value')} in the database, {doc} in the "
+                     f"document; not used until checked.")
 
     rx_items = visit.get("db_medications") or []
     if rx_items:
         lines.append(f"{indent}Medicines — Prescription (database):")
         for m in rx_items:
-            parts = [m.get("name", "Unknown")]
-            if m.get("dosage"):    parts.append(f"dosage {m['dosage']}")
-            if m.get("frequency"): parts.append(f"frequency {m['frequency']}")
-            if m.get("duration"):  parts.append(f"duration {m['duration']}")
-            lines.append(f"{indent}  • " + ", ".join(parts))
+            lines.append(f"{indent}  • " + _medicine_text(m))
     else:
         lines.append(f"{indent}Medicines — Prescription (database): none recorded")
 
@@ -116,10 +221,14 @@ def _format_visit_block(visit, indent="  "):
     else:
         documents = visit.get("documents") or []
         lines.append(f"{indent}Supporting Document(s): {len(documents)} found")
+        is_medicine = _medicine_line_checker(visit)
         for doc in documents:
-            lines.extend(_format_document_block(doc, indent=indent + "  "))
+            lines.extend(_format_document_block(doc, indent=indent + "  ", is_medicine=is_medicine))
 
-    discrepancies = visit.get("discrepancies") or []
+    discrepancies = list(visit.get("discrepancies") or [])
+    if context and visit.get("has_document"):
+        for doc in visit.get("documents") or []:
+            discrepancies += _document_checks(doc, visit_no, context)
     if discrepancies:
         lines.append(f"{indent}Discrepancies flagged:")
         for d in discrepancies:
@@ -127,15 +236,7 @@ def _format_visit_block(visit, indent="  "):
 
     followups = visit.get("followups") or []
     if followups:
-        statuses = [fu.get("status", "") for fu in followups]
-        completed = statuses.count("COMPLETED")
-        missed    = statuses.count("MISSED")
-        lines.append(f"{indent}Follow-up Schedule ({len(followups)} scheduled | {completed} completed | {missed} missed):")
-        for fu in followups:
-            emerg = " 🚨 EMERGENCY" if fu.get("is_emergency") else ""
-            res   = f" → {fu['resolution']}" if fu.get("resolution") else ""
-            note  = f" [{fu['resolution_notes']}]" if fu.get("resolution_notes") else ""
-            lines.append(f"{indent}  • {fu.get('scheduled_date','?')} | {fu.get('status','?')}{emerg}{res}{note}")
+        lines.extend(_followup_lines(followups, indent))
 
     return lines
 
@@ -154,6 +255,12 @@ def create_patient_timeline(patient_data):
     timeline_parts.append(f"PATIENT ID: {patient_id}")
     timeline_parts.append(f"TOTAL VISITS RECORDED: {patient_data.get('total_visits', len(patient_data['visits']))}")
     timeline_parts.append("=" * 60)
+    visits = patient_data["visits"]
+    context = {"age_sex": patient_data.get("age_sex"),
+               "complaints": {n: _clean(v.get("db_chief_complaint") or v.get("chief_complaint")).casefold()
+                              for n, v in enumerate(visits, 1)},
+               "dates": {n: str(v.get("visit_date") or "")[:10] for n, v in enumerate(visits, 1)}}
+    number = {id(v): n for n, v in enumerate(visits, 1)}
 
     # ---- Group visits by date, preserving chronological order ----
     date_groups = []          # list of (date_label, [visits])
@@ -172,12 +279,13 @@ def create_patient_timeline(patient_data):
         timeline_parts.append("-" * 50)
 
         if len(visits_on_date) == 1:
-            timeline_parts.extend(_format_visit_block(visits_on_date[0], indent="  "))
+            v = visits_on_date[0]
+            timeline_parts.extend(_format_visit_block(v, indent="  ", visit_no=number[id(v)], context=context))
         else:
             # Multiple visits on the same date — show as an explicit hierarchy.
             timeline_parts.append(f"  {len(visits_on_date)} separate visits recorded on this date:")
             for i, visit in enumerate(visits_on_date, start=1):
                 timeline_parts.append(f"\n  Visit {chr(64 + i)} of {len(visits_on_date)} (same date):")
-                timeline_parts.extend(_format_visit_block(visit, indent="    "))
+                timeline_parts.extend(_format_visit_block(visit, indent="    ", visit_no=number[id(visit)], context=context))
 
     return "\n".join(timeline_parts)

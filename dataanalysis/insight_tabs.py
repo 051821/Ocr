@@ -99,8 +99,11 @@ function visitTable(rows, detailLabel = "Detail") {
 }
 function labTable(rows) {
   if (!rows || !rows.length) return `<div class="muted">No lab rows.</div>`;
-  return `<div class="tbl-wrap"><table><tr><th>Test (as read)</th><th>Value</th><th>Reference</th><th>Status</th><th>Source</th><th>Note</th></tr>${rows.map(l =>
-    `<tr${/high|low|abnormal|critical|unverified/i.test(l.status || "") ? ' class="flagged"' : ""}><td>${esc(l.test)}</td><td><b>${esc(l.value)}</b></td><td>${esc(l.reference)}</td><td>${statusBadge(l.status)}</td><td>${esc(l.source)}</td><td class="small muted">${esc(l.note)}</td></tr>`).join("")}</table></div>`;
+  // Two dates: the report's own (read from the document) and the visit it is filed under; '—' when not known.
+  const dates = rows.some(l => "report_date" in l || "visit_date" in l);
+  const dateCell = (d, tip) => d ? `<td class="nowrap" title="${tip}">${esc(day(d))}</td>` : `<td class="muted">—</td>`;
+  return `<div class="tbl-wrap"><table><tr><th>Test (as read)</th><th>Value</th><th>Reference</th><th>Status</th>${dates ? "<th>Report date</th><th>Visit date</th>" : ""}<th>Note</th></tr>${rows.map(l =>
+    `<tr${/high|low|abnormal|critical|unverified/i.test(l.status || "") ? ' class="flagged"' : ""}><td${l.source ? ` title="${esc(l.source)}"` : ""}>${esc(l.test)}</td><td><b>${esc(l.value)}</b></td><td>${esc(l.reference)}</td><td>${statusBadge(l.status)}</td>${dates ? dateCell(l.report_date, "Date printed on the report") + dateCell(l.visit_date, "Date of the visit the report is filed under") : ""}<td class="small muted">${esc(l.note)}</td></tr>`).join("")}</table></div>`;
 }
 function rawBlock(raw) {
   if (!raw || !Object.keys(raw).length) return `<div class="muted">The evidence line above lists the source values directly.</div>`;
@@ -236,7 +239,7 @@ function tabAI(p) {
 
   <div class="snap-card">
     ${concerns.length ? `<div class="snap-sec">⚠️ Highlighted concerns <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— grouped by topic, most serious first · open a line for visits, full evidence, raw data and rule</span></div>` : `<div class="snap-sec">✅ No high-risk pattern detected by the record rules</div>`}
-    ${concerns.map((f, k) => `${f._group && (k === 0 || concerns[k - 1]._group !== f._group) ? `<div class="snap-group">${esc(f._group)} <span>(${concerns.filter(c => c._group === f._group).length})</span></div>` : ""}<details class="snap-flag snap-${f.record_error ? "error" : esc(f.level)}" data-concern-row="${f._i}"${areasAttr(f.area ? [f.area] : [])}><summary><span class="snap-more">raw data · rule ▾</span><span class="c-num">${f._n}</span>${f.time ? `<span class="badge t-${f.time === "past" ? "past" : "latest"}">${f.time === "past" ? "Past" + (f.as_of ? " · " + esc(f.as_of) : "") : (f.as_of ? "Latest visit · " + esc(f.as_of) : (f.undated ? "Undated report" : "Latest visit"))}</span> ` : ""}${esc(f.summary || f.title)}</summary><div class="dbody"><div class="snap-full"><b>${esc(f.title)}</b><br><span class="k">Full evidence:</span> ${esc(f.evidence)}${f.significance ? `<br><span class="k">Why it matters:</span> ${esc(f.significance)}` : ""}</div>${rawBox(rawBlock(f.raw))}${ruleBox(f.rule)}</div></details>`).join("")}
+    ${concerns.map((f, k) => `${f._group && (k === 0 || concerns[k - 1]._group !== f._group) ? `<div class="snap-group">${esc(f._group)} <span>(${concerns.filter(c => c._group === f._group).length})</span></div>` : ""}<details class="snap-flag snap-${f.record_error ? "error" : esc(f.level)}" data-concern-row="${f._i}"${areasAttr(f.area ? [f.area] : [])}><summary><span class="snap-more">raw data · rule ▾</span><span class="c-num">${f._n}</span>${f.time ? `<span class="badge t-${f.time === "past" ? "past" : "latest"}">${f.time === "past" ? "Past" + (f.as_of ? " · " + esc(f.as_of) : "") : (f.as_of ? (f.current_because ? "Result " + esc(f.as_of) + " · " + esc(f.current_because) : "Latest visit · " + esc(f.as_of)) : (f.undated ? "Undated report" : "Latest visit"))}</span> ` : ""}${esc(f.summary || f.title)}${f.threshold ? `<div class="q-rule">Threshold: ${esc(f.threshold)}</div>` : ""}</summary><div class="dbody"><div class="snap-full"><b>${esc(f.title)}</b><br><span class="k">Full evidence:</span> ${esc(f.evidence)}${f.significance ? `<br><span class="k">Why it matters:</span> ${esc(f.significance)}` : ""}</div>${rawBox(rawBlock(f.raw))}${ruleBox(f.rule)}</div></details>`).join("")}
     ${info.length ? `<div class="snap-sec">Also noted</div>${info.map(f => `<span class="snap-info" data-concern-row="${p.flags.indexOf(f)}"><b>${esc(f.title)}</b>: ${esc(f.evidence)}</span>`).join("")}` : ""}
     ${dq.length ? `<div class="snap-sec">Data quality (record problems, not findings)</div>${dq.map(f => `<span class="snap-info" data-concern-row="${p.flags.indexOf(f)}" style="border-left:3px dotted #8a94a6;background:#f6f7f9"><b>${esc(f.title)}</b>: ${esc(f.evidence)}</span>`).join("")}` : ""}
     ${p.guideline.length ? `<details class="snap-guide-box"><summary>Guideline context (ICMR / national) · ${p.guideline.length} row(s)</summary>${p.guideline.map(r => `<div class="snap-guide"><b>${esc(r.topic)}</b><span class="snap-status">${esc(r.status)}</span>${r.verified ? '<span class="badge b-ok">✓ Verified</span>' : '<span class="badge b-draft">Draft · not verified</span>'}<span>${esc(r.finding)} <span class="snap-src">— ${esc(r.source)}</span></span></div>`).join("")}</details>` : ""}
@@ -316,11 +319,12 @@ function quickLine(c, latest) {
   let text = String(c.text || ""), ns = c.cites || [];
   const m = /\s*\(((?:#\d+(?:\s*[–-]\s*#?\d+)?[\s,]*)+)\)\s*\.?\s*$/.exec(text);  // citations written in the line
   if (m) { ns = encNumbers(m[1]); text = text.slice(0, m.index).replace(/[\s.;,]+$/, "") + "."; }
-  const when = c.undated ? "undated report" : (c.as_of && c.as_of !== latest ? day(c.as_of) : "");
+  const when = c.undated ? "undated report" : (c.as_of && c.as_of !== latest
+    ? (c.current_because ? `result ${day(c.as_of)} · ${c.current_because}` : day(c.as_of)) : "");
   const ai = c.src !== "rule" ? ` <span class="src src-both" title="${SRC.both[2]}">AI</span>` : "";
   return `<li class="q-row q-${esc(c.level)}"${areasAttr([c.area])}>
     <span class="badge ${lcls} q-badge">${ltext}</span>
-    <span class="q-text">${esc(text)}${ai}</span>
+    <span class="q-text">${esc(text)}${ai}${c.threshold ? `<span class="q-rule">Threshold: ${esc(c.threshold)}</span>` : ""}</span>
     <span class="q-meta">${ns.length ? citeRuns(ns) : ""}${ns.length && when ? "<br>" : ""}${esc(when)}</span></li>`;
 }
 function quickTreatment(t) {

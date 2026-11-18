@@ -48,3 +48,4 @@ outputs/
 .cache/
 .pytest_cache/
 logs/
+dataanalysis/tests/

@@ -55,7 +55,7 @@ def _env_path(name, default=None):
     return os.path.normpath(val)
 
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
+DATABASE_URL = (os.environ.get("DATABASE_URL") or "").strip() or None
 DB_POOL_MIN = _env_int("DB_POOL_MIN", 2)
 DB_POOL_MAX = _env_int("DB_POOL_MAX", 30)
 RESULT_CSV_PATH = _env_path("RESULT_CSV_PATH")

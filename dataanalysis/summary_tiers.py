@@ -186,7 +186,8 @@ def _concern_item(f, encounter_dates, limit):
     return {"id": f["id"], "level": f["level"], "area": f.get("area") or "general", "time": f.get("time", "current"),
             "as_of": f.get("as_of") or "", "undated": bool(f.get("undated")), "title": f.get("title", ""),
             "text": clip(f.get("summary") or f.get("title", ""), limit), "cites": cites(text, encounter_dates),
-            "src": "rule"}
+            "src": "rule", **({"current_because": f["current_because"]} if f.get("current_because") else {}),
+            **({"threshold": f["threshold"]} if f.get("threshold") else {})}
 
 
 def _interacts(f, current_names, active):
@@ -461,7 +462,8 @@ def build_detailed(snapshot, evidence, course, view):
     labs = [{"id": lab_id(g, seen), "test": g.get("test"), "as_written": g.get("test_as_written"),
              "value": g.get("value"), "unit": g.get("unit"), "reference": g.get("reference"),
              "reference_source": g.get("reference_source"), "status": g.get("status"), "critical": g.get("critical"),
-             "date": g.get("date") or "", "encounters": g.get("encounters") or "", "significance": g.get("significance", "")}
+             "date": g.get("date") or "", "report_date": g.get("report_date") or "", "visit_date": g.get("visit_date") or "",
+             "encounters": g.get("encounters") or "", "significance": g.get("significance", "")}
             for g in evidence.get("abnormal_labs") or []]
     reports = view.get("reports") or []
     return {

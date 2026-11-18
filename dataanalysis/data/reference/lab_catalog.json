@@ -267,5 +267,27 @@
     "panel_tft": {"name": "Thyroid function tests", "aliases": ["tft", "thyroid profile", "thyroid function test", "thyroid function tests"], "panel": true},
     "panel_urine": {"name": "Urine routine", "aliases": ["urine routine", "urine r/m", "urine re", "urine routine and microscopy", "urine analysis", "urinalysis"], "panel": true},
     "panel_electrolytes": {"name": "Serum electrolytes", "aliases": ["electrolytes", "serum electrolytes", "s electrolytes"], "panel": true}
+  },
+  "derived_checks": {
+    "_doc": "A value a report calculates from another result is checked against the published formula: within the tolerance it matches; outside it, it is probably a misread. Shown in the lab note only; derived values are never interpreted.",
+    "eag": {
+      "name_pattern": "estimated\\s+average\\s+glucose|\be\\.?a\\.?g\b|mean\\s+(?:plasma|blood)\\s+glucose",
+      "from": "hba1c",
+      "label": "HbA1c",
+      "formulas": {
+        "mg/dl": {
+          "slope": 28.7,
+          "intercept": -46.7,
+          "tolerance": 10
+        },
+        "mmol/l": {
+          "slope": 1.59,
+          "intercept": -2.59,
+          "tolerance": 0.6
+        }
+      },
+      "mmol_below": 30,
+      "source": "ADA (ADAG study, Nathan et al., Diabetes Care 2008): eAG = 28.7 x HbA1c - 46.7 mg/dL"
+    }
   }
 }

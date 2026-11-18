@@ -49,7 +49,8 @@ def raw_visits(record):
 
 def lab_row(l, source=""):
     return {"test": l.get("test_name"), "value": l.get("value"), "reference": l.get("reference"),
-            "status": l.get("status"), "note": l.get("note") or "", "source": source}
+            "status": l.get("status"), "note": l.get("note") or "", "source": source,
+            "report_date": l.get("report_date") or ""}  # the date read from the report itself
 
 
 def raw_reports(record):
@@ -74,10 +75,13 @@ def all_labs(visits, reports):
     app's Lab Results tab); undated rows are matched only with undated rows."""
 
     rows = []
+    # Two dates per row: the report's own (read from the document) and the visit it is filed under.
     for v in visits:
-        rows += [{**l, "source": f"#{v['enc']} ({v['date']})", "_date": v["date"] or None} for l in v["labs"]]
+        rows += [{**l, "source": f"Visit #{v['enc']}", "visit_date": v["date"] or "", "_date": v["date"] or None}
+                 for l in v["labs"]]
     for r in reports:
-        rows += [{**l, "source": f"{r['label']} (undated, not linked to a visit)", "_date": None} for l in r["labs"]]
+        rows += [{**l, "source": f"{r['label']} (not linked to a visit" + ("" if l.get("report_date") else ", undated") + ")",
+                  "visit_date": "", "_date": l.get("report_date") or None} for l in r["labs"]]
     rows = lab_validation.drop_same_day_duplicates(rows, date=lambda r: r["_date"], test=lambda r: r["test"],
                                                    value=lambda r: r["value"], source=lambda r: r["source"])
     for r in rows:

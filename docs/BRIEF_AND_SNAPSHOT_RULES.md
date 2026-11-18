@@ -16,6 +16,7 @@ The AI review (`POST /patients/{id}/review`, and `ai_review` in `/summary`) is a
 - **Rule logic** is Python code in the files above.
 - **Lists and thresholds** (which conditions count as NSAID risks, maximum daily doses, symptom patterns, control-lab patterns and so on) are in [condition_registry.json](../dataanalysis/data/reference/condition_registry.json). Change a list or threshold there, not in the code.
 - **Recognising terms.** To place a brand name, abbreviation or misspelling in the registry's vocabulary (for example "Ezact" is etoricoxib, an NSAID; "HTN" is hypertension), `clinical_terms.py` asks the model once per new term. It checks the answer against the registry vocabulary and caches it for every patient. When a term isn't resolved (offline, `ENABLE_DYNAMIC_ANALYSIS` off, no API key), the registry's regex patterns are used. The model only says what a term is. Every decision about flags, levels and wording is made by the rules.
+- **Painkiller safety rules** (NSAIDs, opioid painkillers, paracetamol) are in `medicine_safety_rules` in the same file, each with its source, threshold and verified / draft state; see "Painkiller safety rules (published guidance)" below. The local NSAID thresholds are `nsaid_repeat` (2 visit days) and `drug_rules.nsaid_cumulative_days` (30 days).
 - **Guideline rows (ICMR / national programmes)** run only for sections marked `"verified": true` in the registry, or when `ENABLE_DRAFT_GUIDELINES` is on. All of them are unverified right now and the flag is off, so `snapshot.guideline.rows` is empty for every patient.
 
 ## Shared first step: finding conditions
@@ -114,7 +115,8 @@ Readings that can't be real are dropped before any rule runs: BP outside 60–26
 
 | Flag | Level | Fires when |
 |---|---|---|
-| Repeated oral NSAIDs with `<conditions>` | high if 2+ risk conditions, else medium | Oral NSAID at 2+ visits, plus hypertension, diabetes, CKD, heart failure, CAD or gout |
+| Repeated oral NSAIDs with `<conditions>` | high if 2+ risk conditions, else medium | Oral NSAID on 2+ different visit days (several encounters on one date count once), plus one of `nsaid_risk_conditions`: hypertension, diabetes, CKD, heart failure, CAD or gout. Both numbers are in `nsaid_repeat` (`min_visit_days`, `high_when_conditions_at_least`). Counts days with a prescription, not days of intake. **Local threshold:** no guideline gives a visit count, so the concern says so and is marked draft. |
+| Oral NSAIDs for about N days in total | medium | The stated course durations of oral NSAIDs add up to ≥ `drug_rules.nsaid_cumulative_days` (30), one value per clinical day. **Local threshold:** no guideline gives a day count; shown as draft on the concern. |
 | Oral NSAID with `<conditions>` | medium | Oral NSAID at 1 visit, plus one of those conditions. Aspirin (an NSAID that is also an antiplatelet) is not counted when the record has a condition it is the antiplatelet treatment for (e.g. CAD). |
 | Oral NSAID with raised BP reading | medium | No risk condition, but BP ≥ 140/90 at the NSAID visit |
 | Topical NSAIDs in record | info | Only gels or creams, with a risk condition |
@@ -124,6 +126,38 @@ Readings that can't be real are dropped before any rule runs: BP outside 60–26
 | Medicine for a condition not recorded | medium | A hypertension, diabetes or thyroid medicine with no matching diagnosis, long-term condition or history |
 | Symptom–medicine links | medium | Leg or ankle swelling on a calcium-channel blocker (amlodipine, nifedipine, felodipine, cilnidipine) or pioglitazone, cough on an ACE inhibitor, muscle pain on a statin. For a medicine-effect flag only the symptom visits within the window after the medicine are shown (pain before the statin started is not "on a statin"). |
 | Recurrent `<skin dx>` with repeated steroids | medium | Skin condition at 2+ visits and either any oral steroid or a potent topical steroid at 2+ visits. The notes cover a return after oral courses, a fungal diagnosis, hypertension or diabetes, leg-predominant rash with a venous diagnosis, and potent topical at 3+ visits. |
+
+**Painkiller safety rules (published guidance)**
+
+NSAIDs, opioid painkillers (tramadol, tapentadol) and paracetamol are also checked against published guidance by [medicine_safety.py](../dataanalysis/medicine_safety.py). The rules are data, in `medicine_safety_rules` in [condition_registry.json](../dataanalysis/data/reference/condition_registry.json); the code has no drug or disease names. Medicines match by registry class (`NSAID (pain / anti-inflammatory)`, `Opioid analgesic`, `Antiplatelet`, …), route, ingredient or name pattern. A name pattern also checks the mapped ingredients, so a brand counts as its generic ("Alprax" is alprazolam). Only lines written as oral count for the oral rules; gels and creams never do.
+
+| Flag | Level | Threshold (as shown on the concern) | Source |
+|---|---|---|---|
+| Oral NSAID with an antiplatelet, anticoagulant or steroid | medium; high with an anticoagulant | Any oral NSAID on the same day as, or during a course of, an antiplatelet (e.g. aspirin), anticoagulant or oral steroid; even short-term use. Aspirin is not counted as the NSAID (aspirin + clopidogrel is dual antiplatelet therapy). | AGS Beers Criteria 2023 |
+| Diclofenac / etoricoxib with cardiovascular risk | medium | Diclofenac or etoricoxib (any dose) with hypertension, diabetes, dyslipidaemia, coronary disease or heart failure | NICE CKS: NSAIDs – prescribing issues |
+| High-dose ibuprofen with cardiovascular risk | medium | Ibuprofen above 2400 mg/day with one of those conditions | NICE CKS |
+| Repeated oral NSAIDs with no kidney function or BP check | medium | Oral NSAID on `nsaid_repeat.min_visit_days`+ visit days with no creatinine / eGFR result, or no BP reading, in the record. The guidance gives no visit count, so the local repeat threshold is used. | NICE CKS; SPS NSAID monitoring |
+| Repeated oral NSAIDs in an adult aged 65 or over | medium | Age 65+ with an oral NSAID on `min_visit_days`+ visit days. Beers says "avoid chronic use" without a day count, so the local repeat threshold is used. | AGS Beers Criteria 2023 |
+| Oral NSAID with eGFR below 30 | high | Any oral NSAID while the latest eGFR is below 30 mL/min/1.73 m² | KDIGO 2024 (NKF algorithm); ICMR STW Chronic Kidney Disease |
+| Tramadol above 300 mg/day over age 75 | high | Tramadol above 300 mg/day in a patient older than 75 (adult maximum 400 mg/day, already checked by "Daily dose above the usual maximum") | Tramadol prescribing information (FDA label) |
+| Opioid painkiller with a benzodiazepine | high | Tramadol / tapentadol on the same day as, or during a course of, a benzodiazepine (or zolpidem) | AGS Beers Criteria 2023; FDA boxed warning |
+| Opioid painkiller with pregabalin / gabapentin | medium | Tramadol / tapentadol on the same day as, or during a course of, pregabalin or gabapentin | AGS Beers Criteria 2023 |
+| Tramadol with an SSRI / SNRI | medium | Tramadol on the same day as, or during a course of, an SSRI or SNRI | Tramadol prescribing information (FDA label) |
+| Tramadol in an adult aged 65 or over with no sodium result | medium | Tramadol at age 65+ with no sodium result in the record | AGS Beers Criteria 2023 (use with caution) |
+| Paracetamol above 3 g/day with a liver-toxicity risk factor | medium | Paracetamol above 3 g/day with weight under 50 kg, liver disease, or alcohol use in the health history (usual maximum 4 g/day, already checked by "Daily dose above the usual maximum") | BNF-based NHS guidance (BASL paracetamol position statement 2022) |
+
+How these rules behave:
+
+- **"Same day or during a course":** two medicines count together when they are prescribed on the same date, or when one's course (start date + stated duration) overlaps the other's.
+- **Daily dose:** strength × the morning-noon-night count, for single-ingredient lines only. A combination product's strength is not split between its parts, so dose rules skip it.
+- **Threshold on every concern:** each concern shows a highlighted "Threshold:" line with the rule, the patient's own figures where relevant, the source, and whether the rule is verified, e.g. *"Threshold: any oral NSAID on the same day as, or during a course of, an antiplatelet (e.g. aspirin)…. Source: AGS Beers Criteria 2023 (draft: not yet clinically verified)."* The Repeated-NSAID and cumulative-days concerns say plainly that their numbers are local, not from a guideline.
+- **Levels are local choices:** the guidance says "avoid" or "use with caution"; High / Medium is our choice and is reviewed with the thresholds.
+- **One brief point per problem:** each rule has a `problem` (`NSAID use`, `Opioid painkiller use`, `Paracetamol use`), so its concern groups with the patient's other concerns about the same medicines and the brief makes one point for them.
+- **Draft until verified:** every rule has `verified`, `verified_by` and `verified_on`. All are draft now. When a clinician has checked a rule against the source, set the three fields on that rule; its concern then reads "verified by … on …" instead of "draft". Unlike draft guideline sections, these rules raise concerns while draft, because they report a prescription combination in the record, not a guideline target.
+- **Adding a rule:** add an entry with an `id`, a `type`, the medicine spec, `level`, `title`, `threshold`, `significance`, `source`, `url` and the three verification fields. Types: `combo` (two medicine groups on the same day or overlapping), `with_conditions`, `daily_dose_with_conditions`, `repeat_without_tests`, `age_repeat`, `lab_below`, `age_dose`, `age_without_lab`, `dose_with_risk`. A threshold written as `{min_visit_days}` is filled from `nsaid_repeat`.
+- **Tests:** `tests/test_medicine_safety.py` checks every rule type, the aspirin exclusion, topical exclusion, brand matching and that every rule carries a source, threshold and verification state.
+
+Sources: [AGS Beers Criteria 2023](https://doi.org/10.1111/jgs.18372) · [NICE CKS: NSAIDs – prescribing issues](https://cks.nice.org.uk/topics/nsaids-prescribing-issues/) · [SPS: NSAID monitoring](https://www.sps.nhs.uk/monitorings/nsaids-monitoring/) · [KDIGO 2024 CKD guideline](https://kdigo.org/wp-content/uploads/2024/03/KDIGO-2024-CKD-Guideline.pdf) · [ICMR STW nephrology](https://icmr.gov.in/icmrobject/uploads/STWs/1725952346_nephrology_all.pdf) · [Tramadol label (DailyMed)](https://dailymed.nlm.nih.gov/dailymed/search.cfm?query=tramadol) · [BASL paracetamol position statement 2022](https://basl.org.uk/uploads/BHPG/Paracetamol%20Position%20Statement_Mar%202022.pdf). The wording of each source should be checked against the original when a rule is verified.
 
 **Course across visits**
 

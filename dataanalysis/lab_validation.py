@@ -15,7 +15,10 @@ import re
 from pathlib import Path
 
 with (Path(__file__).resolve().parent / "data" / "reference" / "lab_catalog.json").open(encoding="utf-8") as _f:
-    CATALOG = json.load(_f)["analytes"]
+    _CATALOG_FILE = json.load(_f)
+    CATALOG = _CATALOG_FILE["analytes"]
+# Derived values checked against the published formula (eAG from HbA1c, ADA): lab_catalog.json 'derived_checks'.
+DERIVED_CHECKS = {k: v for k, v in (_CATALOG_FILE.get("derived_checks") or {}).items() if not k.startswith("_")}
 
 NORMAL, HIGH, LOW = "Normal", "Abnormal (High)", "Abnormal (Low)"
 CRITICAL_HIGH, CRITICAL_LOW = "Critical (High)", "Critical (Low)"
@@ -413,7 +416,39 @@ def _check_rbc_indices(labs):
 def validate_labs(labs, sex=None):
     checked = [validate_lab(lab, sex) for lab in labs or [] if isinstance(lab, dict)]
     _check_rbc_indices(checked)
+    check_derived_values(checked)
     return checked
+
+
+def check_derived_values(labs):
+    """In place: a derived value (eAG / mean plasma glucose) printed with the result it comes from (HbA1c) on the
+    same report is checked against the formula in lab_catalog.json 'derived_checks' (ADA: eAG = 28.7 x HbA1c - 46.7
+    mg/dL). Its note says whether it matches; a mismatch is probably a misread. Never interpreted either way."""
+    def number(lab):
+        return parse_value(lab.get("value"))[1]
+    for rule in DERIVED_CHECKS.values():
+        source = next((l for l in labs if identify(l.get("test_name")) == rule["from"] and number(l) is not None), None)
+        if not source:
+            continue
+        a1c = number(source)
+        for lab in labs:
+            value = number(lab)
+            if lab is source or value is None or not re.search(rule["name_pattern"], str(lab.get("test_name") or ""), re.I):
+                continue
+            unit = "mmol/l" if re.search(r"(?i)mmol", f"{lab.get('value')} {lab.get('reference')}") or \
+                value < rule["mmol_below"] else "mg/dl"
+            f = rule["formulas"][unit]
+            expected = f["slope"] * a1c + f["intercept"]
+            shown = "mmol/L" if unit == "mmol/l" else "mg/dL"
+            calc = f"{f['slope']:g} × {a1c:g} {'+' if f['intercept'] >= 0 else '−'} {abs(f['intercept']):g} ≈ {expected:.0f} {shown}" \
+                if unit == "mg/dl" else f"≈ {expected:.1f} {shown}"
+            if abs(value - expected) <= f["tolerance"]:
+                lab["note"] = (f"Calculated from {rule['label']} {a1c:g}%: matches the ADA formula ({calc}). "
+                               "Not a separate measurement, so not interpreted.")
+            else:
+                lab["note"] = (f"Does not match {rule['label']} {a1c:g}% on the same report: the ADA formula gives {calc}, "
+                               f"the report shows {lab.get('value')}. Probably a misread; check the report. Not interpreted.")
+                lab["derived_mismatch"] = True
 
 
 # ── Ordered tests ("Investigation advised") ──────────────────────────────────

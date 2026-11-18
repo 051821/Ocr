@@ -234,7 +234,8 @@ def concern_line(flag, encounter_dates):
             text = ", ".join([*map(_day, dates[:n - 1]), f"+{hidden} more", _day(dates[-1])])
         else:
             text = ", ".join(_day(d) for d in shown) + (f" +{hidden} more" if hidden else "")
-        return (f"{days} day{'s' if days != 1 else ''}" + (f" ({text})" if text else "")) if days else text
+        # Days with a prescription / record entry, never days of intake: said as 'visit days'.
+        return (f"{days} visit day{'s' if days != 1 else ''}" + (f" ({text})" if text else "")) if days else text
 
     def build(items, extra, dropped=0, n_dates=_MAX_DATES):
         when = when_text(n_dates)

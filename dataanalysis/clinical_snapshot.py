@@ -253,7 +253,10 @@ def _lab_rows(patient_data):
         rows += [(lab, f"Visit #{idx}", _date(v) or None) for lab in v.get("lab_results") or []]
     for doc in patient_data.get("unlinked_documents") or []:
         likely = str((doc.get("likely_visit") or {}).get("visit_date") or "")[:10] or None
-        rows += [(lab, "undated report", likely) for lab in doc.get("lab_results") or []]
+        # A report with its own date (read from the document) is dated by it; else it is an undated report.
+        rows += [(lab, f"report dated {lab['report_date']}, not linked to a visit", lab["report_date"])
+                 if lab.get("report_date") else (lab, "undated report", likely)
+                 for lab in doc.get("lab_results") or []]
     # Derived values (eAG from HbA1c) are never interpreted; the same report linked to two encounters (same test and
     # value within 14 days) counts once.
     kept, seen = [], []
@@ -427,6 +430,11 @@ def tag_current(flags, visits, current_medicines, rec):
         dated_now = bool(encs & latest_encs) or bool(dates and dates[-1] >= latest)
         if current and not dated_now and re.search(r"(?i)\bundated\b", text):
             f["as_of"], f["undated"] = "", True
+        elif current and not dated_now and any(cands):
+            # Current only because a medicine it names is still prescribed: dated by its own latest result / visit,
+            # not by the latest visit (whose record does not show it).
+            f["as_of"] = max(c for c in cands if c)
+            f["current_because"] = "medicine still prescribed" if on_med else "still open"
     return flags
 
 
@@ -1611,23 +1619,48 @@ def build_snapshot(patient_data):
     nsaid_risk = present(REGISTRY["nsaid_risk_conditions"])
     topical = sorted({m for i, meds in enumerate(meds_by_visit, 1) for m in meds if topical_nsaid(m, i)})
 
-    # Repeated oral NSAIDs with a condition they can worsen (topical gels counted separately)
+    # Repeated oral NSAIDs with a condition they can worsen (topical gels counted separately). Threshold:
+    # condition_registry.json 'nsaid_repeat' (visit days with a prescription, not days of intake).
+    repeat = REGISTRY.get("nsaid_repeat") or {}
+    min_days, high_at = repeat.get("min_visit_days", 2), repeat.get("high_when_conditions_at_least", 2)
+    seen = {}  # visit days the rule saw (local: the registry is shared across requests)
+
     def repeated_nsaids(systemic, emit):
         oral = lambda m, i: _NSAID_CLASS in classes_of(m, i) and systemic(m, i)
         visits_on = [i for i, meds in enumerate(meds_by_visit, 1) if any(oral(m, i) for m in meds)]
-        if len(visits_on) >= 2 and nsaid_risk:
+        visit_days = len({day_of_encounter(visits)[i] for i in visits_on})
+        if visit_days >= min_days and nsaid_risk:
             names = [m for m, _ in Counter(m for i, meds in enumerate(meds_by_visit, 1) for m in meds
                                            if oral(m, i)).most_common()]
-            emit("high" if len(nsaid_risk) >= 2 else "medium", f"Repeated oral NSAIDs with {_join(nsaid_risk)}",
+            emit("high" if len(nsaid_risk) >= high_at else "medium", f"Repeated oral NSAIDs with {_join(nsaid_risk)}",
                  f"{', '.join(names[:3])} at {len(visits_on)} visits on "
-                 f"{len({day_of_encounter(visits)[i] for i in visits_on})} days ({_encs(visits_on)})"
+                 f"{visit_days} days ({_encs(visits_on)})"
                  + (f" · plus topical {', '.join(topical[:2])}" if topical else "") + rx_status(names),
                  "NSAIDs can raise BP, worsen fluid retention and affect kidney function.", kind="medication")
+            seen["days"] = visit_days
         elif visits_on and nsaid_risk:
             names = list(dict.fromkeys(m for i in visits_on for m in meds_by_visit[i - 1] if oral(m, i)))
             emit("medium", f"Oral NSAID with {_join(nsaid_risk)}", f"{', '.join(names[:3])} at {_encs(visits_on)}",
                  "NSAIDs can raise BP, worsen fluid retention and affect kidney function.", kind="medication")
     route_rule(repeated_nsaids)
+    for f in flags:  # the threshold the concern was raised at, shown to the doctor
+        if f["title"].startswith("Repeated oral NSAIDs"):
+            f["threshold"] = (f"Repeated = an oral NSAID prescribed on {min_days}+ different visit days "
+                              f"(here {seen.get('days')}) with a condition NSAIDs can worsen; High when "
+                              f"{high_at}+ such conditions (here {len(nsaid_risk)}). Counts prescriptions, not days taken. "
+                              "Local threshold: no guideline gives a visit count (guidance says avoid, or lowest dose for the "
+                              "shortest time; NICE CKS, AGS Beers 2023); draft: not yet clinically verified.")
+
+    # Painkiller safety rules from published guidance (condition_registry.json medicine_safety_rules): each concern
+    # carries its threshold, source and whether a clinician has verified it.
+    import medicine_safety
+    for c in medicine_safety.check(REGISTRY.get("medicine_safety_rules"), rec.prescribed(), visits, labs, present,
+                                   age=profile.get("age"), health_history=patient_data.get("health_history"),
+                                   repeat_days=min_days):
+        flag(c["level"], c["title"], c["evidence"], c["significance"], kind="medication", source=c["source"])
+        flags[-1].update(threshold=c["threshold"], guideline_rule=c["rule"], guideline_verified=c["verified"])
+        if c.get("problem"):
+            flags[-1]["problem"] = c["problem"]
     if not nsaid_visits and topical and nsaid_risk and not any("NSAID" in f["title"] for f in flags):
         flag("info", "Topical NSAIDs in record", ", ".join(topical[:3]), kind="medication")
 
@@ -1713,6 +1746,9 @@ def build_snapshot(patient_data):
              f"Stated durations added over {len(nsaid_rx_days)} prescription day(s): "
              + _encs([i for _, encs in nsaid_rx_days for i in encs]) + f" ({', '.join(nsaid_names[:8])})" + extra_note,
              "Longer cumulative NSAID use raises stomach-bleeding, kidney and BP risk.", kind="medication")
+        flags[-1]["threshold"] = (f"Oral NSAID courses adding up to {limit:g}+ days (here about {nsaid_total:g}), from the "
+                                  "stated durations. Local threshold: no guideline gives a day count; draft: not yet "
+                                  "clinically verified.")
     elif possible_total >= limit:
         flag("medium", f"Oral NSAIDs for about {possible_total:g} days in total (route unclear)",
              f"{nsaid_total:g} days confirmed oral ({', '.join(nsaid_names[:8]) or 'none'})" + extra_note,

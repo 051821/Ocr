@@ -22,3 +22,5 @@ boto3
 spacy 
 medspacy 
 scispacy
+# --- observability (optional; LangSmith tracing of RAG + AI review) ---
+langsmith>=0.3.0

@@ -111,6 +111,94 @@ def _is_garbled(line: str) -> bool:
     return False
 
 
+# A token OCR could not read: letters and 2+ digits mixed, 5+ characters ('G6A2B1C0'); a real drug strength or
+# code such as 'T2DM' or 'B12' is shorter.
+_UNREADABLE_TOKEN = re.compile(r"^(?=(?:.*\d){2})(?=.*[A-Za-z])[A-Za-z0-9]{5,}$")
+# Form labels and vital-sign names a scanned form prints next to the diagnosis box; not a diagnosis on their own.
+_FORM_WORDS = {"bp", "pulse", "spo2", "spo", "sp02", "sign", "signs", "vital", "vitals", "temp", "temperature",
+               "weight", "wt", "height", "ht", "rr", "hr", "bmi", "grbs", "rbs", "name", "age", "sex", "date", "no",
+               "mobile", "address", "o/e", "oe", "c/o", "co", "and", "of", "the"}
+
+
+def clean_diagnosis_text(text):
+    """A diagnosis read from a document, or None: unreadable OCR codes are removed; text left with only form labels
+    or vital-sign names ('BP pulse SPo2 Sign') is not a diagnosis."""
+    words = [w for w in str(text or "").split() if not _UNREADABLE_TOKEN.match(w.strip(",.;:()"))]
+    meaningful = [w for w in words if re.sub(r"[^a-z0-9/]", "", w.casefold()) not in _FORM_WORDS]
+    cleaned = " ".join(words).strip(" ,.;:-")
+    return cleaned if meaningful and len(cleaned) > 2 else None
+
+
+# ── Document (report) date from document_extraction.extracted_text ──────────────────────────────────────────────
+# The pattern runs INSIDE Postgres (regexp_matches), so only the matched label and date leave the database, never the
+# document text: no name, number or other personal detail. A labelled date only ('Reporting Date: 26/05/2026',
+# 'Collection Date', 'DATE: 03/08/2026'); a date written after 'birth' / 'DOB' is never matched.
+DOCUMENT_DATE_PATTERN = (
+    r"(?<!birth)(?<!birth )(?<!dob)(?<!d\.o\.b)(?<!d\.o\.b\.)(?<![a-z])"
+    r"(rep(?:or)?t(?:ed|ing)?\.?\s*(?:date\s*/?\s*time|date|dt|on)?"            # Report / Reported on / REPORT DATETIME
+    r"|(?:sample\s*)?coll(?:ect(?:ed|ion)?)?\.?\s*(?:date\s*/?\s*time|date|dt|on)?"  # Collection Date / SAMPLE COLL DATE
+    r"|sample\s*(?:drawn|received|date)\s*(?:date|on)?"
+    r"|(?:receiv(?:ed|ing)|reg(?:ist(?:ered|ration))?)\.?\s*(?:date\s*/?\s*time|date|dt|on)?"  # Receiving / REG DATETIME
+    r"|test\s*date|date\s*of\s*(?:report|collection|test|sample)|date\s*/?\s*time|date)"
+    r"\s*[:.\-]*\s*"
+    r"(\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}|\d{4}-\d{2}-\d{2}"
+    r"|\d{1,2}[\s\-]*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[\s\-,.]*\d{2,4})"
+)
+# SQL expression: the (label, date) pairs of one document row 'de', or NULL. extracted_text is a jsonb array of lines.
+DOCUMENT_DATE_SQL = (
+    "(SELECT jsonb_agg(m) FROM regexp_matches((SELECT string_agg(t, E'\\n') FROM jsonb_array_elements_text("
+    "CASE WHEN jsonb_typeof(de.extracted_text) = 'array' THEN de.extracted_text ELSE '[]'::jsonb END) t), "
+    "%s, 'gi') AS m)"
+)
+# Which labelled date is the report's: reported > collected / sample > received / registered > test date > 'Date'.
+_DATE_LABEL_RANK = ((r"^rep", 1), (r"coll|sample", 2), (r"receiv|^reg", 3), (r"test", 4), (r"date", 5))
+
+
+def _iso_date(text):
+    """ISO date from '26/05/2026', '19/6/26', '2026-05-26', '03 Aug 2026' (day first, as written in India), else None."""
+    from datetime import date
+    text = str(text or "").strip()
+    m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", text)
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    else:
+        m = re.fullmatch(r"(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})", text)
+        if m:
+            d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        else:
+            m = re.fullmatch(r"(?i)(\d{1,2})[\s\-]*([a-z]{3})[a-z]*[\s\-,.]*(\d{2,4})", text)
+            if not m or m.group(2).casefold() not in _MONTHS:
+                return None
+            d, mo, y = int(m.group(1)), _MONTHS[m.group(2).casefold()], int(m.group(3))
+    y += 2000 if y < 100 else 0
+    try:
+        return date(y, mo, d).isoformat()
+    except ValueError:
+        return None
+
+
+def document_date(hits, visit_date=None):
+    """(ISO date, label as written) of a document from its (label, date) pairs, or (None, None). The best-ranked
+    label wins; a date after the visit by more than 60 days, before 2000, or in the future is not a report date."""
+    from datetime import date as _date_cls
+    visit = str(visit_date or "")[:10]
+    best = None
+    for hit in hits or []:
+        if not isinstance(hit, (list, tuple)) or len(hit) < 2:
+            continue
+        label, iso = " ".join(str(hit[0] or "").split()), _iso_date(hit[1])
+        if not iso or iso < "2000-01-01" or iso > _date_cls.today().isoformat():
+            continue
+        if visit and (_date_cls.fromisoformat(iso) - _date_cls.fromisoformat(visit)).days > 60:
+            continue
+        rank = next((r for pattern, r in _DATE_LABEL_RANK if re.search(pattern, label, re.I)), 9)
+        # Same rank: the date closest to the visit (any date when there is no visit).
+        gap = abs((_date_cls.fromisoformat(iso) - _date_cls.fromisoformat(visit)).days) if visit else 0
+        if best is None or (rank, gap) < best[0]:
+            best = ((rank, gap), iso, label)
+    return (best[1], best[2]) if best else (None, None)
+
+
 def _clean_line(line: str) -> str:
     """Strip markdown artifacts, leading/trailing punctuation, [ILLEGIBLE] tags."""
     line = re.sub(r'\[(?:ILLEGIBLE|UNCLEAR)\]', '', line, flags=re.I)
@@ -496,9 +584,9 @@ def extract_clinical_summary_from_ocr(text_lines: list, visit_date: str = None, 
         "age_sex":              age_sex,
         "chief_complaint":      chief_complaint,
         "symptoms":             symptoms,
-        "provisional_diagnosis": provisional_dx,
-        "confirmed_diagnosis":  confirmed_dx,
-        "clinical_impression":  impression,
+        "provisional_diagnosis": clean_diagnosis_text(provisional_dx),
+        "confirmed_diagnosis":  clean_diagnosis_text(confirmed_dx),
+        "clinical_impression":  clean_diagnosis_text(impression),
         "vitals":               vitals,
         "medications":          deduped_meds,
         "lab_results":          lab_results,
@@ -840,7 +928,10 @@ def extract_lab_results_from_text(text_lines, sex=None):
 
     def name_only(line):
         """A line holding just a catalog test name ("RBC COUNT", "HCT"): one column of a vertical report layout.
-        Panels ("CBC") and qualitative tests have no single numeric value below them."""
+        Panels ("CBC") and qualitative tests have no single numeric value below them. A table header of two or more
+        columns ("HbA1c(%) | Mean Plasma Glucose (mg/dL)" over a reference chart) is not one test's name."""
+        if len([p for p in line.split('|') if p.strip()]) >= 2:
+            return False
         text = line.strip(' :*|')
         key = identify_lab(text) if 0 < len(text) <= 40 else None
         spec = LAB_CATALOG.get(key) or {}
@@ -1099,7 +1190,9 @@ def fetch_patient_history(patient_id):
                     SELECT jsonb_agg(
                         jsonb_build_object(
                             'doc_id', de.id,
-                            'clean_text', de.clean_text
+                            'clean_text', de.clean_text,
+                            -- (label, date) pairs only, matched in the database: no document text leaves it.
+                            'date_hits', """ + DOCUMENT_DATE_SQL + """
                         )
                         ORDER BY de.id
                     ) AS documents
@@ -1169,7 +1262,7 @@ def fetch_patient_history(patient_id):
 
                 ORDER BY v.created_at ASC NULLS LAST;
                 """,
-                (patient_id,),
+                (DOCUMENT_DATE_PATTERN, patient_id),
             )
             rows = cur.fetchall()
             cur.execute("SELECT age_years, sex, health_history_json FROM patient WHERE id = %s::uuid", (patient_id,))
@@ -1267,7 +1360,7 @@ def fetch_patient_history(patient_id):
                 clean_text = doc.get("clean_text")
                 if doc_id is not None and clean_text:
                     if doc_id not in documents:
-                        documents[doc_id] = {"doc_id": doc_id, "lines": []}
+                        documents[doc_id] = {"doc_id": doc_id, "lines": [], "date_hits": doc.get("date_hits") or []}
                     doc_lines = documents[doc_id]["lines"]
                     for line in normalize_medical_text(clean_text).splitlines():
                         ls = line.strip()
@@ -1324,6 +1417,10 @@ def fetch_patient_history(patient_id):
                         doc_lines, visit_date=v["visit_date"], patient_sex=patient_sex
                     )
                     doc_labs = clinical_summary.get("lab_results") or extract_lab_results_from_text(doc_lines, sex=patient_sex)
+                    # The document's own date (report / collection date), shown next to the visit date.
+                    doc_date, doc_date_label = document_date(doc.get("date_hits"), v["visit_date"])
+                    if doc_date:
+                        doc_labs = [{**l, "report_date": doc_date} for l in doc_labs]
                     doc_meds = extract_medications_from_text(doc_lines)
                     for med in clinical_summary.get("medications", []):
                         if med.get("name"):
@@ -1343,6 +1440,8 @@ def fetch_patient_history(patient_id):
                         "clinical_summary":  clinical_summary,
                         "medications_found": doc_meds,
                         "lab_results":       doc_labs,
+                        "document_date":     doc_date,
+                        "document_date_label": doc_date_label,
                     })
 
                     # ---- Discrepancy detection (DB structured vs this document) ----
@@ -1421,21 +1520,26 @@ def fetch_patient_history(patient_id):
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, clean_text FROM document_extraction
-                WHERE patient_id = %s::uuid AND visit_id IS NULL AND clean_text IS NOT NULL
-                ORDER BY id
+                SELECT de.id, de.clean_text, """ + DOCUMENT_DATE_SQL + """
+                FROM document_extraction de
+                WHERE de.patient_id = %s::uuid AND de.visit_id IS NULL AND de.clean_text IS NOT NULL
+                ORDER BY de.id
                 """,
-                (patient_id,),
+                (DOCUMENT_DATE_PATTERN, patient_id),
             )
             unlinked_rows = cur.fetchall()
         unlinked_documents = []
-        for doc_num, (doc_id, clean_text) in enumerate(unlinked_rows, start=1):
+        for doc_num, (doc_id, clean_text, date_hits) in enumerate(unlinked_rows, start=1):
             lines = list(dict.fromkeys(
                 ls.strip() for ls in normalize_medical_text(clean_text).splitlines() if ls.strip()
             ))
             if not lines:
                 continue
             doc = _build_document(f"Unlinked Document {doc_num}", doc_id, lines, patient_sex=patient_sex)
+            # The report's own date (no visit to bound it): its labs are dated by it instead of 'undated'.
+            doc["document_date"], doc["document_date_label"] = document_date(date_hits)
+            if doc["document_date"]:
+                doc["lab_results"] = [{**l, "report_date": doc["document_date"]} for l in doc["lab_results"]]
             doc["likely_visit"], doc["candidate_visits"] = _match_unlinked_document(doc, formatted)
             all_meds.update(doc["medications_found"])
             all_doc_meds.update(doc["medications_found"])

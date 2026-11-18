@@ -97,6 +97,15 @@ the verification (`--revoke` undoes it, `--list` shows every section). `ENABLE_D
 as verified (testing only). The guideline version and the verified sections are part of `PROMPT_VERSION`, so cached
 reviews regenerate when either changes.
 
+### Painkiller safety rules (published guidance)
+
+`medicine_safety.py` checks NSAIDs, opioid painkillers and paracetamol against published guidance (AGS Beers
+2023, NICE CKS, KDIGO 2024 / ICMR CKD, the tramadol label, BNF-based paracetamol guidance). The 12 rules are data in
+`condition_registry.json` → `medicine_safety_rules`; each concern shows its threshold, source and whether a clinician
+has verified the rule (all are draft now). The local NSAID thresholds with no guideline number (`nsaid_repeat`: 2
+visit days; `nsaid_cumulative_days`: 30 days) say so on their concern. Details and the full table:
+[docs/BRIEF_AND_SNAPSHOT_RULES.md](../docs/BRIEF_AND_SNAPSHOT_RULES.md).
+
 ### Security controls
 
 Each control is behind an environment flag so it can be rolled out safely:

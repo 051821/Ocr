@@ -233,3 +233,5 @@
 .cdx .q-hidden {display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:.8rem;background:#f6f7f9;border:1px dashed #c9ced6;border-radius:8px;padding:7px 10px;margin:0 0 8px }
 .cdx .q-chip {background:#fff;border:1px solid #d5dbe6;border-radius:999px;padding:0 8px;color:#3b4352 }
 @media (max-width: 600px) { .cdx .q-rx {grid-template-columns:1fr;gap:3px } .cdx .q-spec {text-align:left } }
+.cdx td.nowrap {white-space:nowrap }
+.cdx .q-rule {display:block;margin-top:3px;font-size:.76rem;color:#5b4a00;background:#fff8e1;border-left:3px solid #f0b429;border-radius:4px;padding:2px 8px;font-weight:400 }

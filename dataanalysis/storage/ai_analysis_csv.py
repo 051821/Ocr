@@ -130,7 +130,17 @@ class _PgConn:
 
     def __init__(self, pool):
         self._pool = pool
-        self._conn = pool.getconn()
+        # psycopg2's pool raises at once when every connection is busy; wait for one instead.
+        if not _PG_SLOTS.acquire(timeout=_PG_WAIT_SECONDS):
+            raise RuntimeError(f"cache database busy: no free connection within {_PG_WAIT_SECONDS}s")
+        try:
+            self._conn = pool.getconn()
+            if self._conn.closed:  # dropped by the server while idle in the pool
+                pool.putconn(self._conn, close=True)
+                self._conn = pool.getconn()
+        except BaseException:
+            _PG_SLOTS.release()
+            raise
 
     def execute(self, sql, params=()):
         from psycopg2.extras import RealDictCursor
@@ -149,10 +159,26 @@ class _PgConn:
         return False
 
     def close(self):
-        if self._conn is not None:
-            self._conn.rollback()  # end any read-only transaction before returning it to the pool
-            self._pool.putconn(self._conn)
-            self._conn = None
+        if self._conn is None:
+            return
+        conn, self._conn = self._conn, None
+        broken = bool(conn.closed)
+        try:
+            if not broken:
+                conn.rollback()  # end any read-only transaction before returning it to the pool
+        except Exception:
+            broken = True  # connection died mid-request; drop it rather than reuse it
+        finally:
+            # Always hand the connection back, or the pool shrinks until it is "exhausted".
+            try:
+                self._pool.putconn(conn, close=broken)
+            finally:
+                _PG_SLOTS.release()
+
+
+_PG_POOL_MAX = int(os.getenv("CACHE_DB_POOL_MAX", "10"))
+_PG_WAIT_SECONDS = float(os.getenv("CACHE_DB_WAIT_SECONDS", "30"))
+_PG_SLOTS = threading.BoundedSemaphore(_PG_POOL_MAX)
 
 
 def _connect_pg(url):
@@ -160,7 +186,11 @@ def _connect_pg(url):
     with _SCHEMA_LOCK:
         if _PG_POOL is None:
             from psycopg2.pool import ThreadedConnectionPool
-            pool = ThreadedConnectionPool(1, int(os.getenv("CACHE_DB_POOL_MAX", "5")), dsn=url)
+            pool = ThreadedConnectionPool(1, _PG_POOL_MAX, dsn=url)
+            # psycopg2 keeps only `minconn` idle connections and closes the rest on putconn, so every
+            # busy moment reopened connections (~1-2s each to Supabase). Keep up to max open, but still
+            # open them lazily (the constructor opened only one).
+            pool.minconn = _PG_POOL_MAX
             conn = pool.getconn()
             try:
                 with conn, conn.cursor() as cur:

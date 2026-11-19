@@ -14,6 +14,7 @@ from analysis import format_age_sex
 from review_rules import deterministic_review
 from core.demographics import fetch_demographics
 from core.fetching import fetch_all_patient_ids
+from core.referrals import fetch_referrals
 from core.vital_flags import fetch_recent_vital_flags
 from services.chat.answers import answer_patient_question
 from services.graph_service import is_neo4j_configured, sync_patient_to_graph
@@ -184,6 +185,12 @@ def build_summary(patient_id, patient_data, include_ai=True):
     if not include_ai:
         del out["ai_review"]
     return out
+
+
+@router.get("/{patient_id}/referrals")
+def get_referrals(patient_id: UUID):
+    """Where the patient was referred out to and for what (DB read, no record load, no LLM)."""
+    return {"patient_id": str(patient_id), "referrals": jsonable_encoder(fetch_referrals(str(patient_id)))}
 
 
 @router.get("/{patient_id}/long-term-conditions")

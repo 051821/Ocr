@@ -22,7 +22,7 @@ import logging
 import os
 import re
 import threading
-from datetime import date as _date, datetime, timedelta, timezone
+from datetime import date as _date, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -346,13 +346,6 @@ def record(patient_data):
 
 # ── Medicines taken before a lab result (cause attribution) ─────────────────
 
-def _days_before(a, b):
-    try:
-        return (_date.fromisoformat(b) - _date.fromisoformat(a)).days
-    except (TypeError, ValueError):
-        return None
-
-
 def effect_window_medicines(rec, lab_key, lab_date, direction):
     """[{name, effect, window_days, last_taken}] for medicines whose course overlaps the plausible window before a
     lab test (registry drug_lab_effects). Empty when the test is undated: an undated result cannot be placed."""
@@ -389,33 +382,3 @@ def report_path():
     return None if value.strip().casefold() in ("", "off", "false", "0", "none") else Path(value)
 
 
-def report_unmapped(rec):
-    """Add this record's unmapped and model-only products to the report file. Product names only, no patient data.
-    Never raises."""
-    path = report_path()
-    unmapped, model_only = rec.unmapped(), rec.model_only()
-    if not path or not (unmapped or model_only):
-        return
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    try:
-        with _REPORT_LOCK:
-            data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-            data.setdefault("_doc", "Products the ingredient registry (data/reference/medicine_ingredients.json) "
-                                    "does not map. 'unmapped': no ingredients found, so class rules cannot see them. "
-                                    "'model_only': ingredients from the model's term resolution only; check and add "
-                                    "them to the registry.")
-            for section, items in (("unmapped", [part for _, part in unmapped]), ("model_only", model_only)):
-                bucket = data.setdefault(section, {})
-                for name in items:
-                    entry = bucket.setdefault(base_key(name) or name.casefold(), {"examples": [], "times_seen": 0})
-                    entry["times_seen"] += 1
-                    entry["last_seen"] = now
-                    if name not in entry["examples"] and len(entry["examples"]) < 5:
-                        entry["examples"].append(name)
-            data["updated"] = now
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(path.suffix + ".tmp")
-            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1, sort_keys=True), encoding="utf-8")
-            os.replace(tmp, path)
-    except Exception as exc:  # reporting must never break the snapshot
-        logger.warning("unmapped-brands report not written: %s", exc)

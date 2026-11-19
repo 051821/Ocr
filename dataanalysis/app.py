@@ -51,19 +51,6 @@ def safe_val(val, default="Not available"):
     return s
 
 
-def render_field(label: str, value, default="Not available"):
-    """Render a clean, responsive labelled field row."""
-    label = html.escape(str(label))
-    s = html.escape(safe_val(value, default))
-    default = html.escape(str(default))
-    if s == default:
-        st.markdown(f"<div class='field-row'><span class='field-name'>{label}:</span> "
-                    f"<span class='field-na'>{default}</span></div>", unsafe_allow_html=True)
-    else:
-        st.markdown(f"<div class='field-row'><span class='field-name'>{label}:</span> "
-                    f"<span class='field-val'>{s}</span></div>", unsafe_allow_html=True)
-
-
 def _chat_label(meta):
     if not meta or not isinstance(meta, dict):
         return "LLM-generated response"
@@ -151,6 +138,11 @@ def _load_patient(pid, refresh=False):
     st.session_state["patient_data"] = api_client.get_patient(pid)
     st.session_state["medication_journey_data"] = api_client.get_medication_journey(pid)
     st.session_state["clinical_views"] = api_client.get_snapshot(pid)
+    try:
+        st.session_state["referrals"] = api_client.get_referrals(pid)
+    except api_client.ApiError as e:
+        logger.warning("Referrals unavailable for %s: %s", pid, e.detail)
+        st.session_state["referrals"] = []
     st.session_state.pop("insight_view", None)
 
 
@@ -447,6 +439,41 @@ if visit_clusters:
             "Why": r.get("exercise_reason", ""),
             "Matched terms": ", ".join(r["terms"]),
         } for r in visit_clusters]), use_container_width=True, hide_index=True)
+
+
+def _referral_line(r):
+    """'Psychiatrist → Behavior Healthcare Center' and its sub-line (date · centre · status)."""
+    head = " → ".join(esc(x) for x in (r.get("referred_for"), r.get("referred_to")) if x) or "Referred to another provider"
+    date = (r.get("referral_date") or "")[:10]
+    status = "⏳ Pending" if r.get("is_open") else "✓ Resolved"
+    if r.get("referral_status"):
+        status = esc(str(r["referral_status"]).title())
+    bits = [date, esc(r.get("center_name") or ""), status]
+    if r.get("referral_reason") and r.get("specialty_name"):
+        bits.append("Reason: " + esc(r["referral_reason"]))
+    if r.get("expected_review_date") and r.get("is_open"):
+        bits.append("Review by " + str(r["expected_review_date"])[:10])
+    return head, " · ".join(b for b in bits if b)
+
+
+referrals = st.session_state.get("referrals") or []
+if referrals:
+    latest = referrals[0]
+    head, sub = _referral_line(latest)
+    badge_cls = "status-warn" if latest.get("is_open") else "status-ok"
+    more = f'<span class="metric-sub" style="margin-left:8px;">+{len(referrals)-1} more</span>' if len(referrals) > 1 else ""
+    st.markdown(f"""
+    <div class="metric-card" style="margin-top:8px;">
+        <div><span class="status-badge {badge_cls}">🔀 Referred out</span>
+             <span style="font-weight:600; margin-left:8px;">{head}</span>{more}</div>
+        <div class="metric-sub" style="margin-top:4px;">{sub}</div>
+    </div>
+    """, unsafe_allow_html=True)
+    if len(referrals) > 1:
+        with st.expander(f"All referrals ({len(referrals)})", expanded=False):
+            for r in referrals:
+                h, sb = _referral_line(r)
+                st.markdown(f"<b>{h}</b><br><span style='font-size:0.85rem;'>{sb}</span>", unsafe_allow_html=True)
 
 st.write("")
 

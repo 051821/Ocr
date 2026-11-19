@@ -157,6 +157,15 @@ def check(rules, lines, visits, labs, present, age=None, health_history=None, re
             if med and age is not None and age >= rule["min_age"] and not lab_keys & set(rule["labs"]):
                 emit(rule, f"{', '.join(dict.fromkeys(_cite(l) for l in med[-3:]))} · age {age} · no "
                            f"{' / '.join(rule['labs'])} result in the record")
+        elif kind == "age_without_med":
+            if not med or age is None or age < rule["min_age"]:
+                continue
+            cover = [l for l in lines if _matches(l, rule["without"])]
+            bare = [l for l in med if not any(_overlap(l, c) for c in cover)]
+            if bare:
+                what = " / ".join(rule["without"].get("classes") or rule["without"].get("ingredients") or []).casefold()
+                emit(rule, f"{', '.join(dict.fromkeys(_cite(l) for l in bare[-3:]))} · age {age} · no {what} "
+                           f"prescribed alongside")
         elif kind == "dose_with_risk":
             high = [(l, _daily_mg(l, rule["med"]["ingredients"][0])) for l in med]
             high = [(l, mg) for l, mg in high if mg and mg > rule["daily_mg_above"]]

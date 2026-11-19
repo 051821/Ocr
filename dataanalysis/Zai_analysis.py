@@ -15,11 +15,10 @@ MODULE_DIR = str(Path(__file__).resolve().parent)
 if MODULE_DIR not in sys.path:
     sys.path.insert(0, MODULE_DIR)
 
-from review_facts import PROMPT_VERSION
 from clinical_insights import build_insight_evidence, evidence_for_prompt
 from core.llm_client import complete as llm_complete
 from core.tracing import traced
-from review_rules import REQUIRED_ENDING, REVIEW_SECTIONS, sanitize_review as _sanitize, validate_model_review
+from review_rules import REQUIRED_ENDING, validate_model_review
 from core.config import flag as _flag
 
 SYSTEM_PROMPT = """You are a clinical-record review assistant writing a short, patient-specific clinical brief for the treating clinician. Use only the PATIENT EVIDENCE JSON supplied; it was extracted from this patient's record.
@@ -139,10 +138,6 @@ def _call_openrouter(prompt, retry_feedback=None, patient_id=None):
     result = llm_complete(messages, "review", temperature=0.1, max_tokens=600,
                           patient_id=patient_id, validate=validate_model_review)
     return {"raw_markdown": result["content"], "model_name": result["model"], "model_version": ""}
-
-
-def _sanitize_review(markdown, patient_data=None):
-    return _sanitize(markdown, patient_data or {})
 
 
 @traced(name="ai_review.analyze_full")

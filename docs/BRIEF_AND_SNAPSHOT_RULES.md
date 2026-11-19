@@ -8,6 +8,7 @@ Both come from fixed rules over the patient's record. There is no AI writing, no
 |---|---|---|
 | Clinical snapshot | `snapshot` in `GET /patients/{id}/snapshot`, `clinical_snapshot` in `GET /patients/{id}/summary` | `build_snapshot()` in [clinical_snapshot.py](../dataanalysis/clinical_snapshot.py) |
 | Patient brief | `brief` in `GET /patients/{id}/snapshot` | `deterministic_review()` in [review_rules.py](../dataanalysis/review_rules.py), using [clinical_insights.py](../dataanalysis/clinical_insights.py) |
+| Referral flag | `referrals` in `GET /patients/{id}/referrals` | `fetch_referrals()` in [core/referrals.py](../dataanalysis/core/referrals.py) |
 
 The AI review (`POST /patients/{id}/review`, and `ai_review` in `/summary`) is a different output. It reuses the brief's Overview, Abnormal Results and Evidence sections unchanged, and only its Clinical Insights section is written by the model.
 
@@ -129,7 +130,50 @@ Readings that can't be real are dropped before any rule runs: BP outside 60–26
 
 **Painkiller safety rules (published guidance)**
 
-NSAIDs, opioid painkillers (tramadol, tapentadol) and paracetamol are also checked against published guidance by [medicine_safety.py](../dataanalysis/medicine_safety.py). The rules are data, in `medicine_safety_rules` in [condition_registry.json](../dataanalysis/data/reference/condition_registry.json); the code has no drug or disease names. Medicines match by registry class (`NSAID (pain / anti-inflammatory)`, `Opioid analgesic`, `Antiplatelet`, …), route, ingredient or name pattern. A name pattern also checks the mapped ingredients, so a brand counts as its generic ("Alprax" is alprazolam). Only lines written as oral count for the oral rules; gels and creams never do.
+NSAIDs, opioid painkillers (see "Opioid painkillers in the registry" below) and paracetamol are also checked against published guidance by [medicine_safety.py](../dataanalysis/medicine_safety.py). The rules are data, in `medicine_safety_rules` in [condition_registry.json](../dataanalysis/data/reference/condition_registry.json); the code has no drug or disease names. Medicines match by registry class (`NSAID (pain / anti-inflammatory)`, `Opioid analgesic`, `Antiplatelet`, …), route, ingredient or name pattern. A name pattern also checks the mapped ingredients, so a brand counts as its generic ("Alprax" is alprazolam). Only lines written as oral count for the oral rules; gels and creams never do.
+
+#### How a rule is checked
+
+`check()` in [medicine_safety.py](../dataanalysis/medicine_safety.py) is called from `build_snapshot()` ([clinical_snapshot.py](../dataanalysis/clinical_snapshot.py)) with the rules, the patient's prescribed lines, visits, labs, conditions, age and health history. For each rule, `med` is the list of prescribed lines that match the rule's medicine, for example any oral NSAID. Then the rule's `type` decides the test:
+
+| Type | Fires when | Example rule |
+|---|---|---|
+| `combo` | medicine A and medicine B were given at overlapping times | NSAID with an antiplatelet or steroid; opioid with a benzodiazepine |
+| `with_conditions` | the medicine was given and the patient has a listed condition | diclofenac with cardiovascular risk |
+| `daily_dose_with_conditions` | the daily mg is above the limit and a listed condition is present | ibuprofen above the limit with cardiovascular risk |
+| `repeat_without_tests` | given on 2+ visit days with no creatinine / eGFR result (and no BP reading, if the rule needs one) | repeated NSAIDs with no kidney or BP check |
+| `age_repeat` | given on 2+ visit days and age ≥ the rule's minimum | repeated NSAIDs at 65+ |
+| `lab_below` | the latest lab value is below the cut-off | NSAID with eGFR < 30 |
+| `age_dose` | age is above the limit and the daily dose is above the limit | tramadol > 300 mg/day over 75 |
+| `age_without_lab` | age ≥ the minimum and a needed lab is missing | tramadol at 65+ with no sodium result |
+| `age_without_med` | age ≥ the minimum and a protective medicine isn't given alongside | opioid at 65+ with no laxative |
+| `dose_with_risk` | the dose is above the limit plus a risk: low weight, a listed condition, or alcohol use | paracetamol > 3 g/day with a liver risk |
+
+Each concern lists its level, title, evidence (medicine, encounter, dose, condition; usually at most the last 3), significance, source, threshold, rule id, and whether the rule is verified. The check only reads data: it never writes to the database. A concern describes a pattern in the record. It is not a diagnosis.
+
+#### Where the rules come from
+
+The code holds only the 10 rule types. Each rule (medicines, limits, level, wording) is an entry in `medicine_safety_rules` in [condition_registry.json](../dataanalysis/data/reference/condition_registry.json), copied by hand from the published guideline named in its `source` field (with a `url`):
+
+| Source | Rules |
+|---|---|
+| AGS Beers Criteria 2023 (medicine safety in older adults) | NSAID with bleeding risk; repeated NSAIDs at 65+; opioid with a benzodiazepine; opioid with pregabalin / gabapentin; tramadol at 65+ with no sodium result |
+| NICE CKS: NSAIDs – prescribing issues (2024); SPS NSAID monitoring | diclofenac / etoricoxib with cardiovascular risk; high-dose ibuprofen; repeated NSAIDs with no kidney or BP check |
+| KDIGO 2024 CKD guideline (NKF algorithm); ICMR STW Chronic Kidney Disease | NSAID with eGFR below 30 |
+| Tramadol prescribing information (FDA label) | tramadol above 300 mg/day over 75; tramadol with an SSRI / SNRI |
+| FDA boxed warning | opioid with a benzodiazepine (with Beers) |
+| Indian pain consensus 2017 (Dureja et al., J Pain Res) | opioid with liver disease; morphine / codeine with eGFR below 15; opioid at 65+ with no laxative |
+| BNF-based NHS guidance (BASL paracetamol position statement 2022) | paracetamol above 3 g/day with a liver risk |
+
+The "2 visit days" that counts as repeated use is a local threshold set by the team, not a guideline value. It is `nsaid_repeat.min_visit_days` in the same file.
+
+To change a threshold or add a rule of an existing type, edit the JSON. A new kind of test needs a new `type` branch in `check()`.
+
+#### Verification status
+
+All 15 rules currently have `"verified": false` and `"verified_by": null`: no clinician has yet checked them against their sources. Their concerns still show, marked as unverified. To verify a rule, a clinician checks it against its `url`, then `verified`, `verified_by` and `verified_on` are set in the JSON.
+
+#### Each rule
 
 | Flag | Level | Threshold (as shown on the concern) | Source |
 |---|---|---|---|
@@ -140,11 +184,84 @@ NSAIDs, opioid painkillers (tramadol, tapentadol) and paracetamol are also check
 | Repeated oral NSAIDs in an adult aged 65 or over | medium | Age 65+ with an oral NSAID on `min_visit_days`+ visit days. Beers says "avoid chronic use" without a day count, so the local repeat threshold is used. | AGS Beers Criteria 2023 |
 | Oral NSAID with eGFR below 30 | high | Any oral NSAID while the latest eGFR is below 30 mL/min/1.73 m² | KDIGO 2024 (NKF algorithm); ICMR STW Chronic Kidney Disease |
 | Tramadol above 300 mg/day over age 75 | high | Tramadol above 300 mg/day in a patient older than 75 (adult maximum 400 mg/day, already checked by "Daily dose above the usual maximum") | Tramadol prescribing information (FDA label) |
-| Opioid painkiller with a benzodiazepine | high | Tramadol / tapentadol on the same day as, or during a course of, a benzodiazepine (or zolpidem) | AGS Beers Criteria 2023; FDA boxed warning |
-| Opioid painkiller with pregabalin / gabapentin | medium | Tramadol / tapentadol on the same day as, or during a course of, pregabalin or gabapentin | AGS Beers Criteria 2023 |
+| Opioid painkiller with a benzodiazepine | high | Any opioid painkiller (tramadol, tapentadol, codeine, morphine, oxycodone, fentanyl ...) on the same day as, or during a course of, a benzodiazepine (or zolpidem) | AGS Beers Criteria 2023; FDA boxed warning |
+| Opioid painkiller with pregabalin / gabapentin | medium | Any opioid painkiller (tramadol, tapentadol, codeine, morphine, oxycodone, fentanyl ...) on the same day as, or during a course of, pregabalin or gabapentin | AGS Beers Criteria 2023 |
 | Tramadol with an SSRI / SNRI | medium | Tramadol on the same day as, or during a course of, an SSRI or SNRI | Tramadol prescribing information (FDA label) |
 | Tramadol in an adult aged 65 or over with no sodium result | medium | Tramadol at age 65+ with no sodium result in the record | AGS Beers Criteria 2023 (use with caution) |
+| Opioid painkiller with liver disease | medium | Any opioid painkiller with liver disease in the record | Indian pain consensus 2017 (Dureja et al.) |
+| Morphine / codeine with kidney failure | high | Morphine or codeine while the latest eGFR is below 15 (source: avoid on haemodialysis; eGFR below 15 is the record's proxy) | Indian pain consensus 2017 (Dureja et al.) |
+| Opioid painkiller in an adult aged 65 or over with no laxative | medium | An opioid at age 65+ with no laxative on the same day or during its course | Indian pain consensus 2017 (Dureja et al.) |
 | Paracetamol above 3 g/day with a liver-toxicity risk factor | medium | Paracetamol above 3 g/day with weight under 50 kg, liver disease, or alcohol use in the health history (usual maximum 4 g/day, already checked by "Daily dose above the usual maximum") | BNF-based NHS guidance (BASL paracetamol position statement 2022) |
+
+**Opioid painkillers in the registry**
+
+Opioids are effective painkillers, but they are prescribed cautiously because of their side effects, and use for too long or other than prescribed can lead to opioid use disorder. A prescription line is the `Opioid analgesic` class when its ingredients include one of these (ingredient `groups: ["opioid"]` in [medicine_ingredients.json](../dataanalysis/data/reference/medicine_ingredients.json), group `opioid` → class `Opioid analgesic`, problem `Opioid painkiller use`; the brand and generic name pattern is in `medicine_classes` in [condition_registry.json](../dataanalysis/data/reference/condition_registry.json)).
+
+*How a line is recognised.* The line's name is reduced to a key (dose form and strength removed: "Tab MS Contin 30 mg" → `ms contin`), looked up in `brands`, else split on `+`, else read for ingredient names (spellings in `names`; misspellings of 6+ letters match by similarity), else resolved by the model. The ingredients give the class. A written form ("Tab", "Inj", "patch") gives the route; otherwise the brand's `form`, the prescription template, or the ingredient's `default_route`.
+
+| Ingredient | Spellings matched | Routes | Brands (single ingredient) | Combination brands (ingredients) |
+|---|---|---|---|---|
+| Tramadol | tramadol | oral, injection (default oral) | — | Ultracet (tramadol + paracetamol) |
+| Tapentadol | tapentadol | oral | — | — |
+| Codeine | codeine, codein | oral | — | — |
+| Fentanyl | fentanyl, fentanil | patch (read as topical), oral (buccal / sublingual), injection | Abstral, Actiq, Duragesic, Fentora | — |
+| Hydrocodone | hydrocodone | oral | Hysingla (ER) | Co-Gesic, Lorcet, Norco, Vicodin, Zydone (hydrocodone + paracetamol); Reprexain (hydrocodone + ibuprofen) |
+| Benzhydrocodone | benzhydrocodone | oral | — | Apadaz (benzhydrocodone + paracetamol) |
+| Hydromorphone | hydromorphone | oral, injection (default oral) | Dilaudid | — |
+| Meperidine (pethidine) | pethidine, meperidine | oral, injection | Demerol | — |
+| Methadone | methadone | oral | Dolophine, Methadose | — |
+| Morphine | morphine | oral, injection | Duramorph, Infumorph, Mitigo (injection); Kadian (capsule); MorphaBond ER, MS Contin (tablet) | — |
+| Oxycodone | oxycodone | oral | RoxyBond, Oxaydo, OxyContin, Roxicodone, Xtampza (ER) | Percocet (oxycodone + paracetamol); Percodan (oxycodone + aspirin) |
+| Oxymorphone | oxymorphone | oral | Opana (ER) | — |
+
+*Flag rules and tests, per medicine.* "Tests" are the lab results a rule looks for in the record; a rule with a test raises its concern when the test is missing.
+
+| Medicine | Flag rule | Level | When it is raised | Tests checked | Source |
+|---|---|---|---|---|---|
+| Every opioid above (any route) | Opioid painkiller with a benzodiazepine | high | The opioid on the same day as, or during a course of, alprazolam, clonazepam, lorazepam, diazepam, etizolam, chlordiazepoxide, nitrazepam, clobazam or zolpidem | — | AGS Beers 2023; FDA boxed warning |
+| Every opioid above (any route) | Opioid painkiller with pregabalin / gabapentin | medium | The opioid on the same day as, or during a course of, pregabalin or gabapentin | — | AGS Beers 2023 |
+| Tramadol (also Ultracet) | Tramadol with an SSRI / SNRI | medium | Same day / overlapping course with sertraline, fluoxetine, escitalopram, citalopram, paroxetine, fluvoxamine, duloxetine, venlafaxine or desvenlafaxine | — | Tramadol FDA label |
+| Tramadol (also Ultracet) | Tramadol in an adult aged 65 or over with no sodium result | medium | Age 65+ and no sodium result anywhere in the record | **Sodium** | AGS Beers 2023 |
+| Tramadol, single-ingredient lines | Tramadol above 300 mg/day over age 75 | high | Strength × morning-noon-night count above 300 mg/day, age over 75 | — | Tramadol FDA label |
+| Tramadol, single-ingredient lines | Daily dose above the usual maximum | — | Above 400 mg/day (`max_daily_dose`) | — | Registry maximum |
+| Reprexain (its ibuprofen part, tablet = oral) | All oral-NSAID rules in the table above: with antiplatelet / anticoagulant / steroid; repeated without a kidney or BP check; age 65+ repeated; eGFR below 30; two NSAIDs on one day; cumulative NSAID days | as listed | As listed for oral NSAIDs | **Creatinine or eGFR**, **BP reading**; **eGFR** (below 30) | NICE CKS; KDIGO 2024; AGS Beers 2023 |
+| Ultracet, Apadaz, Co-Gesic, Lorcet, Norco, Vicodin, Zydone, Percocet (their paracetamol part) | Paracetamol above 3 g/day with a liver-toxicity risk factor | medium | Only on single-ingredient paracetamol lines, so these combinations are **not** dose-checked | — | BNF-based NHS guidance |
+| Every opioid above (any route) | Opioid painkiller with liver disease | medium | Liver disease in the record (diagnosis, long-term list or treating medicine) | Liver tests are how the condition is found, not a rule test | Indian pain consensus 2017 |
+| Morphine, codeine (incl. MS Contin, Kadian, Duramorph, Infumorph, Mitigo, MorphaBond) | Morphine / codeine with kidney failure | high | Latest eGFR below 15 | **eGFR** | Indian pain consensus 2017 |
+| Every opioid above (any route) | Opioid painkiller in an adult aged 65 or over with no laxative | medium | Age 65+ and no `Laxative` class line (lactulose, Cremaffin, isabgol, bisacodyl, senna) overlapping the opioid | — | Indian pain consensus 2017 |
+| Every opioid (systemic lines) | Medicine timeline: same-class duplicate mark | display only | Two different opioid products (or one product at two encounters) on one date, by a non-topical route, are marked "duplicate" in the snapshot medicine grid | — | Local |
+
+*What is not checked for opioids (gaps, by design or not yet built):*
+
+- **No dose maximum** for codeine, tapentadol, fentanyl, hydrocodone, hydromorphone, pethidine, methadone, morphine, oxycodone or oxymorphone: opioid doses are titrated to the patient, so a single mg ceiling would mislead. Combination products are never dose-checked (a written strength is not split between ingredients).
+- **No "Same-class medicines on the same day" brief flag** for two opioids: `drug_rules.duplicate_classes` does not list `Opioid analgesic`. Add it there to raise one (medium).
+- **Kidney and liver:** only morphine / codeine with eGFR below 15 and any opioid with liver disease are checked (Indian consensus). Pethidine, tramadol or oxycodone with a low eGFR, respiratory monitoring, long-term use and opioid use disorder have no rule yet: the Indian sources give no checkable threshold for them ("avoid long-term therapy in opioid dependence/tolerance" names no duration).
+- **Percodan's aspirin** is an ingredient but the `Antiplatelet` class comes from the name pattern (`aspirin|ecosprin|clopid|ticagrel`), so Percodan does not count as an antiplatelet for the NSAID + antiplatelet rule.
+- **Fentanyl patches** are read as the topical route (the form word "patch"). The opioid rules have no route condition, so they still apply; the timeline duplicate mark skips topical lines.
+
+*Evidence sources for the opioid rules.* Each rule names one `source`; rules from Indian guidance also carry an `evidence` list in the registry with the exact sentence the rule rests on (`source`, `url`, `says`). "Verified" below means the source was read and the rule matches what it says. It is **not** clinical sign-off: every rule stays draft (`verified: false`) until a clinician sets `verified_by` / `verified_on`.
+
+| Source | Type | Used for | What it says (quoted) |
+|---|---|---|---|
+| Dureja GP, Iyer RN, Das G, Ahdal J, Narang P. *Evidence and consensus recommendations for the pharmacological management of pain in India.* J Pain Res 2017;10:709–736. [doi:10.2147/JPR.S128655](https://doi.org/10.2147/JPR.S128655) | Indian expert consensus | `opioid_with_liver_disease` | "Dose adjustment should be considered while administering NSAIDs and opioids to patients with hepatic impairment." |
+| same | | `morphine_codeine_kidney_failure` | "morphine and codeine are undialyzable and should be avoided in patients who are undergoing hemodialysis." Also: "fentanyl can be safely administered to patients with renal dysfunction or those who require dialysis" (with caution), so fentanyl is not flagged. |
+| same | | `older_adult_opioid_no_laxative` | "Opioids such as morphine, codeine, fentanyl or oxycodone may cause constipation or respiratory depression" in the elderly and "should be used with caution, preferably in low doses and along with laxatives." |
+| National Cancer Grid Palliative Care Committee (Vallath N, Rajagopal MR, Tandon T). *Guidelines for Stocking and Dispensing Essential Narcotic Drugs in Medical Institutions.* Aug 2017. [PDF](https://palliumindia.org/wp-content/uploads/2023/09/RMI-Guidelines-by-NCG-1.pdf) | Regulatory guidance (summarises the NDPS Act) | `ndps_essential_narcotic: true` on morphine, methadone, codeine, hydrocodone, oxycodone, fentanyl in [medicine_ingredients.json](../dataanalysis/data/reference/medicine_ingredients.json) (data only, no flag yet) | "The notified list of ENDs currently includes -- Morphine, Methadone, Codeine, Hydrocodone, Oxycodone, and Fentanyl." "Prescriptions must mention the total quantity of the END, daily dose and the duration of the prescription." |
+| NDPS (Amendment) Act 2014; NDPS Third Amendment Rules 2015; Essential Narcotic Drugs notification (Dept of Revenue, 5 May 2015) | Indian law | Same tag, through the NCG document above (the Act itself was not read directly) | Defines the Essential Narcotic Drugs and the prescribing requirements above. |
+
+Where the Indian sources are silent, the earlier international sources stay the only evidence:
+
+| Rule | Indian evidence |
+|---|---|
+| Opioid with a benzodiazepine; opioid with pregabalin / gabapentin | None. The consensus does not discuss these combinations; source stays AGS Beers 2023 / FDA boxed warning. |
+| Tramadol with an SSRI / SNRI; tramadol over 300 mg/day over 75; tramadol at 65+ with no sodium | None; source stays the FDA tramadol label / Beers. |
+| Two opioids on the same day | None; still not a brief flag. |
+
+Not used: the National Cancer Grid "Best Practices in using Step 3 Opioids" slides (the tmc.gov.in link returns 404 and no copy was found). The 2017 consensus was funded by Johnson & Johnson and two authors are J&J employees; that is why its rules stay draft until a clinician checks them.
+
+*Verification.* The brand compositions come from the US product labels and have no `verified_by` / `verified_on`; most of these brands are US names, so Indian brands need adding as `brands` entries once their composition is checked. All opioid flag rules are draft until a clinician sets `verified`, `verified_by` and `verified_on`.
+
+*Code tests.* `tests/test_medicine_safety.py`: `test_opioid_rules` (tramadol rules), `test_new_opioid_brands_resolve_and_match_the_opioid_rules` (MS Contin, Norco, Percocet, Duragesic, codeine, pethidine resolve to the opioid class; MS Contin + Alprax raises the benzodiazepine flag) and `test_indian_consensus_opioid_rules` (liver disease, eGFR below 15 for morphine but not fentanyl or eGFR 40, 65+ with and without a laxative, every Indian rule carries a quoted `evidence` entry).
 
 How these rules behave:
 
@@ -154,7 +271,7 @@ How these rules behave:
 - **Levels are local choices:** the guidance says "avoid" or "use with caution"; High / Medium is our choice and is reviewed with the thresholds.
 - **One brief point per problem:** each rule has a `problem` (`NSAID use`, `Opioid painkiller use`, `Paracetamol use`), so its concern groups with the patient's other concerns about the same medicines and the brief makes one point for them.
 - **Draft until verified:** every rule has `verified`, `verified_by` and `verified_on`. All are draft now. When a clinician has checked a rule against the source, set the three fields on that rule; its concern then reads "verified by … on …" instead of "draft". Unlike draft guideline sections, these rules raise concerns while draft, because they report a prescription combination in the record, not a guideline target.
-- **Adding a rule:** add an entry with an `id`, a `type`, the medicine spec, `level`, `title`, `threshold`, `significance`, `source`, `url` and the three verification fields. Types: `combo` (two medicine groups on the same day or overlapping), `with_conditions`, `daily_dose_with_conditions`, `repeat_without_tests`, `age_repeat`, `lab_below`, `age_dose`, `age_without_lab`, `dose_with_risk`. A threshold written as `{min_visit_days}` is filled from `nsaid_repeat`.
+- **Adding a rule:** add an entry with an `id`, a `type`, the medicine spec, `level`, `title`, `threshold`, `significance`, `source`, `url` and the three verification fields. Types: `combo` (two medicine groups on the same day or overlapping), `with_conditions`, `daily_dose_with_conditions`, `repeat_without_tests`, `age_repeat`, `lab_below`, `age_dose`, `age_without_lab`, `dose_with_risk`, `age_without_med` (age at least `min_age` and no `without` medicine overlapping the course). Optional `evidence`: a list of `{source, url, says}` with the sentence the rule rests on. A threshold written as `{min_visit_days}` is filled from `nsaid_repeat`.
 - **Tests:** `tests/test_medicine_safety.py` checks every rule type, the aspirin exclusion, topical exclusion, brand matching and that every rule carries a source, threshold and verification state.
 
 Sources: [AGS Beers Criteria 2023](https://doi.org/10.1111/jgs.18372) · [NICE CKS: NSAIDs – prescribing issues](https://cks.nice.org.uk/topics/nsaids-prescribing-issues/) · [SPS: NSAID monitoring](https://www.sps.nhs.uk/monitorings/nsaids-monitoring/) · [KDIGO 2024 CKD guideline](https://kdigo.org/wp-content/uploads/2024/03/KDIGO-2024-CKD-Guideline.pdf) · [ICMR STW nephrology](https://icmr.gov.in/icmrobject/uploads/STWs/1725952346_nephrology_all.pdf) · [Tramadol label (DailyMed)](https://dailymed.nlm.nih.gov/dailymed/search.cfm?query=tramadol) · [BASL paracetamol position statement 2022](https://basl.org.uk/uploads/BHPG/Paracetamol%20Position%20Statement_Mar%202022.pdf). The wording of each source should be checked against the original when a rule is verified.
@@ -225,10 +342,80 @@ Each condition gets the strongest status the record supports, in this order:
 | **Course** | Age and sex, number of visits and period. Complaints raised at 2+ visits (top 3). Each visit's complaint for 3 visits or fewer; otherwise only the first and latest. |
 | **Conditions** | **Active**: seen at the latest visit, known history, or long-term (up to 4). **Not recorded since**: older ones (up to 3). Then up to 2 course-pattern flags. |
 | **Key findings** | Guideline rows (when enabled). Out-of-range control labs against their condition and medicine ("above range … despite …"). Possible undiagnosed conditions. Other abnormal labs, up to 3 points in total. Then up to 2 symptom or vital flags. |
-| **Treatment** | Medicines at the latest visit grouped by the condition they treat, then "Also:" for the rest. Medicines with a condition link that weren't continued. The top high or medium medicine flag, marked ⚠. |
+| **Treatment** | Medicines at the latest visit grouped by the condition they are used for (see "How a medicine is linked to a condition" below), then "Also:" for the rest. Medicines with a condition link that weren't continued. The top high or medium medicine flag, marked ⚠. |
 | **Gaps to check** | Follow-up flags, pending or unsuccessful follow-up calls, advised tests with no result, out-of-range values never repeated, high or medium data-quality flags, and uninterpretable results (up to 3) |
 
+**How a medicine is linked to a condition** ([clinical_insights.py](../dataanalysis/clinical_insights.py) `_collect_medicines`)
+
+A medicine is listed under a condition when **both** hold:
+
+1. **It is used for that condition**, by any of:
+   - its name matches the condition's own medicine list (`condition_meds`, e.g. Skin condition: betamethasone, clobetasol, mupirocin …);
+   - its class is the condition's specific treatment class (`class_treats`, e.g. Hypertension → Antihypertensive);
+   - its class is in the condition's `class_links` list (below), which includes symptom relief;
+   - the cached medicine resolution says it treats the condition and the registry agrees.
+2. **The record ties them**: it was prescribed at an encounter that records the condition, or the condition is known / long-term / chronic, or that encounter has no diagnosis of its own.
+
+The class comes from the registry name patterns (`medicine_classes`) or the cached resolution, so any brand of a class counts without listing brand names: "Citrizine" is an Antihistamine, "Vasaline" a Soothing / emollient lotion, "Topisal 6% lotion" (salicylic acid) a Keratolytic (topical).
+
+`class_links` in [condition_registry.json](../dataanalysis/data/reference/condition_registry.json):
+
+| Condition | Classes linked |
+|---|---|
+| Skin condition (eczema, dermatitis, psoriasis, urticaria, xerosis, folliculitis, scabies …) | Topical corticosteroid, Antihistamine, Soothing / emollient lotion, Keratolytic (topical), Topical immunomodulator (non-steroid), Antifungal, Topical acne treatment, Anthelmintic / antiparasitic (scabicide), Leukotriene antagonist (anti-allergic) |
+| Asthma / COPD | Bronchodilator / inhaled asthma medicine, Leukotriene antagonist (anti-allergic) |
+| GERD / acidity | Acid suppressant, Prokinetic / antiemetic |
+| Herpes zoster | Antiviral |
+| Tuberculosis | Antitubercular |
+| Urinary tract infection, Pneumonia | Antibiotic |
+| Tropical infection | Antimalarial |
+
+- **Symptom relief doesn't keep a condition active.** Each medicine carries `for` (every link, shown in Treatment) and `treats` (specific links only: `condition_meds`, `class_treats`, the resolution). "Active" in Conditions uses `treats`, so an antihistamine still running after a rash was last recorded does not make the rash active.
+- **A class link is never evidence that the condition exists.** Unlike `class_treats`, `class_links` is not used by the "medicine with no condition in the record" check, so an antihistamine without a skin diagnosis is not flagged.
+- **Adding a link:** add the class to the condition's list in `class_links` (a new class goes in `medicine_classes` first). No code change.
+- **Allergy:** there is no separate allergy condition (allergic rhinitis, conjunctivitis) in `condition_map`; urticaria counts as Skin condition. An antihistamine given only for an allergy that is not a skin condition stays under "Also".
+
 When fewer than 2 themes have content, the section reads "The record holds too little clinical data for patient-specific insights."
+
+---
+
+## Part 3: Referral rules
+
+The dashboard shows a **"🔀 Referred out"** flag when the patient was sent to another provider. The data comes from `GET /patients/{id}/referrals`, built by `fetch_referrals()` in [core/referrals.py](../dataanalysis/core/referrals.py). It is a direct DB read, with no record load and no LLM. Patients are identified by ID only, and the patient name is never selected.
+
+### Sources
+
+| Type | Table | Row included when |
+|---|---|---|
+| `HOSPITAL_REFERRAL` | `referral_case` (+ `hospital`, `hospital_specialty`, `center`) | `deleted_at` is empty |
+| `DOCTOR_RECOMMENDATION` | `prescription` + `visit` (+ `center`) | `is_referral_recommended` is true, no `referral_case_id` yet, visit `completed_at` is set, and neither prescription nor visit is deleted |
+
+A doctor recommendation that has become a referral case is shown once, as the case. Rows are sorted newest first (`referred_on` for cases, visit `completed_at` for recommendations), up to 50 per patient.
+
+### What it was for, and where to
+
+| Type | Referred for | Referred to |
+|---|---|---|
+| Hospital referral | `hospital_specialty.name`, else `referral_reason` | `hospital.name` |
+| Doctor recommendation | `prescription.referral_treatment_name` | `prescription.referral_specialist_name` |
+
+In prescriptions the two column names are the wrong way round from what they hold. `referral_treatment_name` holds the specialty (for example "Psychiatrist") and `referral_specialist_name` holds the place (for example "Behavior Healthcare Center"). The table above follows what the columns actually hold. Text is trimmed, and when both values are empty the flag reads "Referred to another provider".
+
+### Pending or resolved
+
+| Type | Pending (amber badge) | Resolved (green badge) |
+|---|---|---|
+| Doctor recommendation | `referral_resolved_at` is empty | a coordinator set `referral_resolved_at` |
+| Hospital referral | `closed_at` is empty and `status` is not CLOSED / COMPLETED / RESOLVED / CANCELLED | otherwise |
+
+When a hospital referral has a `status`, the flag shows that status text in place of Pending / Resolved. The closing status values are **assumed**: `referral_case` has no rows yet, so they haven't been checked against real data.
+
+### Display
+
+- The newest referral is shown as: **what for → where**, then date · centre · status.
+- Hospital referrals add "Reason: …" when the specialty is the headline, and "Review by <expected_review_date>" while open.
+- With more than one referral the flag adds "+N more", and an "All referrals" dropdown lists every row the same way.
+- When there are no referrals, or the endpoint fails, no flag is shown and the rest of the dashboard loads as usual.
 
 ---
 
@@ -284,7 +471,7 @@ Rules checked that didn't fire, and why:
 - **Course:** 65 years / Female, 3 visit(s) from 2026-08-06 to 2026-09-23 (48 days); #1: both hand, fingers itching, crack; #2: both leg pain, tingling sensation; #3: white discoloration, cracks in skin, itching on both ….
 - **Conditions:** Active: Eczema (working diagnosis, 2 visits), Diabetes Mellitus (known history), Hypertension (known history); Not recorded since: Oa knee (last #2).
 - **Key findings:** Possible neuropathic symptoms: tingling sensation (#2).
-- **Treatment:** Eczema: Clop cream; Also: Cetirizine Dihydrochloride Syrup, Parasoft cream/vaseline jelly, Prednisolone 10mg; ⚠ Oral NSAID with Hypertension and Type 2 diabetes mellitus: NSAIDs can raise BP, worsen fluid retention and affect kidney function.
+- **Treatment:** Eczema: Clop cream + Cetirizine Dihydrochloride Syrup + Parasoft cream/vaseline jelly; Also: Prednisolone 10mg; ⚠ Oral NSAID with Hypertension and Type 2 diabetes mellitus: NSAIDs can raise BP, worsen fluid retention and affect kidney function.
 ## Abnormal Results
 - No laboratory results are available in the record.
 ## Evidence
@@ -300,6 +487,6 @@ How each part was built:
 - **Course**: no complaint repeats across visits, so there is no "Recurring complaints" point. With only 3 visits, each visit's complaint is listed, clipped to 8 words.
 - **Conditions**: Eczema was seen at the latest visit, and the long-term conditions always count as active. OA knee was last seen at #2.
 - **Key findings**: there are no labs and no guideline rows, so the only point is the symptom flag (neuropathic).
-- **Treatment**: of the medicines at #3, only Clop cream is linked to a recorded condition (eczema). The rest go under "Also". The first medium medicine flag is the NSAID one, so it gets the ⚠ point. Ibuprofen has no condition link, so it doesn't appear under "Not continued".
+- **Treatment**: at #3, where eczema is recorded, Clop cream (topical steroid), cetirizine (antihistamine) and the vaseline jelly (emollient) are linked to eczema by their class. Prednisolone (systemic steroid) is not in eczema's class list, so it goes under "Also". The first medium medicine flag is the NSAID one, so it gets the ⚠ point. Ibuprofen has no condition link, so it doesn't appear under "Not continued".
 - **Gaps to check**: left out. The follow-ups were routine and there are no data-quality or follow-up flags.
 - **Evidence**: no labs cite an encounter, so it shows the last 2 encounters.

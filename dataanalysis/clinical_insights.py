@@ -7,7 +7,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 import clinical_terms
-from core.encounters import recheck_followups, course_end, dose_not_specified, clinical_days, day_of_encounter, duration_days, taken_medications, zero_dose_lines
+from core.encounters import recheck_followups, course_end, dose_not_specified, clinical_days, taken_medications, zero_dose_lines
 from core.tracing import traced
 import lab_validation
 import medicine_profile
@@ -332,6 +332,15 @@ def _prescribed_for(med_encounters, condition, visits):
     return any(not has_dx(i) for i in med_encounters if 0 < i <= len(visits))
 
 
+_CLASS_TREATS = REGISTRY["class_treats"]
+
+
+def _class_links(condition):
+    """Registry classes used for a condition, supportive ones included (class_links): a medicine of one of them is
+    shown under the condition when the record ties them, but does not by itself keep the condition active."""
+    return set(REGISTRY.get("class_links", {}).get(condition) or [])
+
+
 def _collect_medicines(visits, conditions, patient_data=None):
     latest = max((_date(v) for v in visits), default="")
     canonical = [c for c in conditions if c["canonical"] in _CONDITION_MEDS]
@@ -362,13 +371,19 @@ def _collect_medicines(visits, conditions, patient_data=None):
     rows = []
     for entry in meds.values():
         treats = set((entry["info"] or {}).get("treats") or ())
-        used_for = [c for c in conditions if c["canonical"] and (
-            c["canonical"] in treats
-            or (c in canonical and re.search(rf"\b(?:{_CONDITION_MEDS[c['canonical']]})", entry["name"], re.I)))
-            and _prescribed_for(entry["encounters"], c, visits)]
+        # Registry classes of the medicine (resolved or by name pattern): a class listed for a condition in
+        # class_treats / class_links links it, so any brand of an antihistamine or emollient counts for eczema.
+        classes = set(medicine_class(entry["name"], entry["info"]).split(" + ")) - {""}
+
+        def specific(c):  # a specific treatment (not symptom relief such as an antihistamine or emollient)
+            return bool(c["canonical"] in treats or _CLASS_TREATS.get(c["canonical"]) in classes
+                        or (c in canonical and re.search(rf"\b(?:{_CONDITION_MEDS[c['canonical']]})", entry["name"], re.I)))
+        linked = [c for c in conditions if c["canonical"] and (specific(c) or classes & _class_links(c["canonical"]))
+                  and _prescribed_for(entry["encounters"], c, visits)]
         # One label per condition: 'Diabetes Mellitus' (long-term list) and 'Diabetes' (a visit) are one condition.
-        used_for = list(dict.fromkeys(condition_label(next(x for x in used_for if x["canonical"] == c["canonical"]))
-                                      for c in used_for))
+        label_of = lambda c: condition_label(next(x for x in linked if x["canonical"] == c["canonical"]))
+        used_for = list(dict.fromkeys(label_of(c) for c in linked))
+        treated = list(dict.fromkeys(label_of(c) for c in linked if specific(c)))
         rows.append({
             "name": entry["name"],
             "class": medicine_class(entry["name"], entry["info"]),
@@ -385,6 +400,8 @@ def _collect_medicines(visits, conditions, patient_data=None):
             "first": entry["first"],
             "last": entry["last"],
             "for": used_for,
+            # Conditions it is a specific treatment for (keeps the condition active); 'for' also has symptom relief.
+            "treats": treated,
             # Seen at the first recorded visit, or with a known (pre-existing) condition from its first mention: when it
             # was started is not in the record, so it is only ever "first recorded on <date>".
             "first_recorded": bool(entry["first"] and (entry["first"] == record_first or any(
@@ -1380,11 +1397,6 @@ def render_evidence(evidence, insights=()):
     return lines or ["- No visit source references are available."]
 
 
-def _flag_line(f):
-    text = f"- **{f['title']}:** {f['evidence']}"
-    return text + (f". {f['significance']}" if f.get("significance") else ".")
-
-
 def record_overview(evidence):
     """Who, over what period, and each condition by how the record supports it; always from the record."""
     p = evidence["patient"]
@@ -1508,7 +1520,7 @@ def _is_current(condition, latest, evidence=None):
     if condition["last_seen"] == latest or condition["status"] in _KNOWN or condition.get("long_term"):
         return True
     label = condition_label(condition)
-    return bool(evidence) and any(m.get("status") == "current" and label in (m.get("for") or [])
+    return bool(evidence) and any(m.get("status") == "current" and label in (m.get("treats", m.get("for")) or [])
                                   for m in evidence.get("medicines") or [])
 
 
@@ -1949,11 +1961,6 @@ def _first_clause(text):
     return clause[:1].lower() + clause[1:]
 
 
-def _result(g):
-    repeat = " (reported twice)" if len(re.findall(r"#\d+", g["encounters"])) == 2 or "–" in g["encounters"] else ""
-    return f"{g['test']} {g['value']}{_short_ref(g)}{repeat}"
-
-
 def _expand_ranges(text):
     """'(#1–3)' / '#2-#4' -> '#1, #2, #3': an encounter range written as its encounters."""
     def expand(m):
@@ -2116,27 +2123,6 @@ def _rewrite_flag(f):
             and first_word[1:].islower()):
         detail = detail[0].lower() + detail[1:]  # "Tingling sensation ..." -> "tingling sensation ..."
     return (f"{title}: {detail}" if detail else title) + status_text
-
-
-def _said(brief, f, evidence):
-    """True when the brief already makes this flag's point, in any words. Strongest sign: it repeats one of the
-    flag's values or dates ('7.6', '2026-07-10', '180') together with any word of the title. Otherwise most of the
-    title's words (two thirds), or half of them plus a medicine or other name from the flag's evidence."""
-    low = brief.casefold()
-    stop = {"the", "and", "with", "for", "from", "oral", "visit", "visits", "record", "latest", "usual", "including",
-            "repeated", "type", "mellitus", "disease"}
-    words = {w for w in re.findall(r"[a-z][a-z0-9]{2,}", _tidy_title(f["title"]).casefold()) if w not in stop}
-    pattern = lambda w: rf"\b{re.escape(w[:6])}" if len(w) >= 5 else rf"\b{re.escape(w)}\b"
-    hits = sum(1 for w in words if re.search(pattern(w), low))
-    ratio = hits / len(words) if words else 0
-    text = str(f.get("evidence") or "") + " " + str(f["title"])
-    values = set(re.findall(r"\d{4}-\d{2}-\d{2}|\d+\.\d+|(?<![\d.#])\d{3,}(?![\d.])", text))
-    value_hit = any(re.search(rf"(?<![\d.]){re.escape(v)}(?![\d])", brief) for v in values)
-    title_low = f["title"].casefold()
-    names = {w.casefold() for w in re.findall(r"\b[A-Z][A-Za-z]{3,}", str(f.get("evidence") or ""))
-             if w.casefold() not in title_low}
-    name_hit = any(n in low for n in names)
-    return (value_hit and hits >= 1) or ratio >= 0.65 or (ratio >= 0.5 and (not names or name_hit))
 
 
 _CONDITION_WORDS = {w for entry in REGISTRY["condition_map"] for w in re.findall(r"[a-z]{4,}", entry["name"].casefold())}
@@ -2846,10 +2832,6 @@ def fix_time_labels(markdown, evidence):
         return m.group(0)
     return re.sub(r"(Current at [^:;]{1,20}:\s*)([^;\n]+)", fix, str(markdown or ""))
 
-
-def drop_undated_dates(markdown, evidence):
-    """Kept for callers: the time-label check (fix_time_labels)."""
-    return fix_time_labels(markdown, evidence)
 
 def refresh_record_lines(markdown, evidence):
     """A served brief (model or cached) brought in line with the record as it is now: the one-line Course, the

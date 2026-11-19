@@ -196,7 +196,7 @@
     },
     {
       "class": "Opioid analgesic",
-      "pattern": "tramad|tapent|ultracet"
+      "pattern": "tramad|tapent|ultracet|codein|fentan|abstral|actiq|duragesic|fentora|hydrocod|hysingla|apadaz|co-?gesic|lorcet|\\bnorco\\b|reprexain|vicodin|zydone|hydromorph|dilaudid|meperid|pethid|demerol|methadon|dolophine|methadose|morphin|duramorph|infumorph|kadian|mitigo|morphabond|\\bms\\s*contin|oxycod|roxybond|oxaydo|oxycontin|roxicodone|xtampza|percocet|percodan|oxymorph|\\bopana\\b"
     },
     {
       "class": "Acid suppressant (PPI / H2 blocker / antacid)",
@@ -303,6 +303,10 @@
       "pattern": "benzoyl|adapal|tretino|deriva|nadoxin"
     },
     {
+      "class": "Keratolytic (topical)",
+      "pattern": "(?<!acetyl)salicyl|topisal|salac|keratol|urea\\s+(?:cream|lotion)"
+    },
+    {
       "class": "Antiviral",
       "pattern": "acyclo|valacyc|oseltam|famcicl"
     },
@@ -367,6 +371,19 @@
     "Gout": "Uric-acid lowering",
     "Tuberculosis": "Antitubercular",
     "GERD / acidity": "Acid suppressant (PPI / H2 blocker / antacid)"
+  },
+  "_class_links_doc": "Medicine classes used for a condition, including supportive and symptom relief (an antihistamine or emollient for eczema). A medicine of one of these classes is shown under the condition only when the record ties them: prescribed at an encounter that records the condition, or the condition is long-term / known. Unlike class_treats, a class here is never taken as evidence that the condition exists.",
+  "class_links": {
+    "Skin condition": ["Topical corticosteroid", "Antihistamine", "Soothing / emollient lotion", "Keratolytic (topical)",
+                       "Topical immunomodulator (non-steroid)", "Antifungal", "Topical acne treatment",
+                       "Anthelmintic / antiparasitic (incl. scabicide)", "Leukotriene antagonist (anti-allergic)"],
+    "Asthma / COPD": ["Bronchodilator / inhaled asthma medicine", "Leukotriene antagonist (anti-allergic)"],
+    "GERD / acidity": ["Acid suppressant (PPI / H2 blocker / antacid)", "Prokinetic / antiemetic"],
+    "Herpes zoster": ["Antiviral"],
+    "Tuberculosis": ["Antitubercular"],
+    "Urinary tract infection": ["Antibiotic"],
+    "Pneumonia": ["Antibiotic"],
+    "Tropical infection": ["Antimalarial"]
   },
   "_max_daily_dose_doc": "Usual adult maximum daily oral dose (mg). Checked only when the strength is written on the medicine and the regimen is a morning-noon-night count (1-0-1); topical forms are skipped.",
   "max_daily_dose": [
@@ -665,7 +682,7 @@
         "b": {"name_pattern": "alprazol|clonazep|lorazep|diazep|etizol|chlordiazep|nitrazep|clobaz|zolpidem"},
         "level": "high",
         "title": "Opioid painkiller with a benzodiazepine",
-        "threshold": "tramadol / tapentadol on the same day as, or during a course of, a benzodiazepine (or zolpidem)",
+        "threshold": "an opioid painkiller (tramadol, tapentadol, codeine, morphine, oxycodone, fentanyl ...) on the same day as, or during a course of, a benzodiazepine (or zolpidem)",
         "significance": "The combination can cause severe sedation and respiratory depression; the guidance advises avoiding it.",
         "source": "AGS Beers Criteria 2023; FDA boxed warning on opioids with benzodiazepines",
         "url": "https://doi.org/10.1111/jgs.18372",
@@ -679,7 +696,7 @@
         "b": {"name_pattern": "pregab|gabap"},
         "level": "medium",
         "title": "Opioid painkiller with pregabalin / gabapentin",
-        "threshold": "tramadol / tapentadol on the same day as, or during a course of, pregabalin or gabapentin",
+        "threshold": "an opioid painkiller (tramadol, tapentadol, codeine, morphine, oxycodone, fentanyl ...) on the same day as, or during a course of, pregabalin or gabapentin",
         "significance": "Raises the risk of sedation and respiratory depression; the guidance advises avoiding the combination except when switching between them.",
         "source": "AGS Beers Criteria 2023",
         "url": "https://doi.org/10.1111/jgs.18372",
@@ -712,6 +729,65 @@
         "significance": "Tramadol can cause low sodium (SIADH) in older adults; sodium should be checked when it is started or changed.",
         "source": "AGS Beers Criteria 2023 (use with caution)",
         "url": "https://doi.org/10.1111/jgs.18372",
+        "verified": false, "verified_by": null, "verified_on": null
+      },
+      {
+        "id": "opioid_with_liver_disease",
+        "problem": "Opioid painkiller use",
+        "type": "with_conditions",
+        "med": {"classes": ["Opioid analgesic"]},
+        "conditions": ["Liver disease"],
+        "level": "medium",
+        "title": "Opioid painkiller with liver disease",
+        "threshold": "any opioid painkiller (tramadol, codeine, morphine, oxycodone, fentanyl ...) in a patient with liver disease in the record",
+        "significance": "Liver dysfunction can raise opioid blood levels (and lower the effect of codeine and tramadol); the Indian consensus advises considering a dose adjustment.",
+        "source": "Indian pain consensus 2017 (Dureja et al., J Pain Res)",
+        "url": "https://doi.org/10.2147/JPR.S128655",
+        "evidence": [
+          {"source": "Dureja GP et al. Evidence and consensus recommendations for the pharmacological management of pain in India. J Pain Res 2017;10:709-736",
+           "url": "https://doi.org/10.2147/JPR.S128655",
+           "says": "Dose adjustment should be considered while administering NSAIDs and opioids to patients with hepatic impairment."}
+        ],
+        "verified": false, "verified_by": null, "verified_on": null
+      },
+      {
+        "id": "morphine_codeine_kidney_failure",
+        "problem": "Opioid painkiller use",
+        "type": "lab_below",
+        "med": {"ingredients": ["morphine", "codeine"]},
+        "lab": "egfr",
+        "below": 15,
+        "level": "high",
+        "title": "Morphine / codeine with kidney failure (eGFR below 15)",
+        "threshold": "morphine or codeine while the latest eGFR is below 15 mL/min/1.73 m2 (the source's advice is for patients on haemodialysis; eGFR below 15, kidney failure, is the record's proxy)",
+        "significance": "Morphine and codeine are not removed by dialysis and should be avoided in patients on haemodialysis; fentanyl is a safer choice, with caution.",
+        "source": "Indian pain consensus 2017 (Dureja et al., J Pain Res)",
+        "url": "https://doi.org/10.2147/JPR.S128655",
+        "evidence": [
+          {"source": "Dureja GP et al. Evidence and consensus recommendations for the pharmacological management of pain in India. J Pain Res 2017;10:709-736",
+           "url": "https://doi.org/10.2147/JPR.S128655",
+           "says": "Morphine and codeine are undialyzable and should be avoided in patients who are undergoing hemodialysis."}
+        ],
+        "verified": false, "verified_by": null, "verified_on": null
+      },
+      {
+        "id": "older_adult_opioid_no_laxative",
+        "problem": "Opioid painkiller use",
+        "type": "age_without_med",
+        "med": {"classes": ["Opioid analgesic"]},
+        "without": {"classes": ["Laxative"]},
+        "min_age": 65,
+        "level": "medium",
+        "title": "Opioid painkiller in an adult aged 65 or over with no laxative",
+        "threshold": "an opioid painkiller at age 65+ with no laxative on the same day or during its course",
+        "significance": "Opioids cause constipation and respiratory depression in older adults; the Indian consensus advises caution, low doses and a laxative alongside.",
+        "source": "Indian pain consensus 2017 (Dureja et al., J Pain Res)",
+        "url": "https://doi.org/10.2147/JPR.S128655",
+        "evidence": [
+          {"source": "Dureja GP et al. Evidence and consensus recommendations for the pharmacological management of pain in India. J Pain Res 2017;10:709-736",
+           "url": "https://doi.org/10.2147/JPR.S128655",
+           "says": "Opioids such as morphine, codeine, fentanyl or oxycodone may cause constipation or respiratory depression [in the elderly] and should be used with caution, preferably in low doses and along with laxatives."}
+        ],
         "verified": false, "verified_by": null, "verified_on": null
       },
       {

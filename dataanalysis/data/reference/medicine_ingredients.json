@@ -6,7 +6,7 @@
     "Unmapped products, and products only the model resolved, are written to the unmapped-brands report (config UNMAPPED_BRANDS_REPORT) so they can be added here.",
     "Brand keys are lower case, without dose-form words (tab, cream, gel ...) or strengths. Add a brand only when its composition has been checked; set verified_by / verified_on when a pharmacist has checked an entry."
   ],
-  "version": "2026-11-ingredients1",
+  "version": "2026-11-ingredients2",
   "brands": {
     "nucoxia": {
       "ingredients": [
@@ -338,6 +338,221 @@
       "ingredients": [
         "cholecalciferol"
       ]
+    },
+    "abstral": {
+      "ingredients": [
+        "fentanyl"
+      ],
+      "form": "tablet"
+    },
+    "actiq": {
+      "ingredients": [
+        "fentanyl"
+      ]
+    },
+    "duragesic": {
+      "ingredients": [
+        "fentanyl"
+      ]
+    },
+    "fentora": {
+      "ingredients": [
+        "fentanyl"
+      ],
+      "form": "tablet"
+    },
+    "hysingla": {
+      "ingredients": [
+        "hydrocodone"
+      ],
+      "form": "tablet"
+    },
+    "hysingla er": {
+      "ingredients": [
+        "hydrocodone"
+      ],
+      "form": "tablet"
+    },
+    "apadaz": {
+      "ingredients": [
+        "benzhydrocodone",
+        "paracetamol"
+      ],
+      "form": "tablet"
+    },
+    "co gesic": {
+      "ingredients": [
+        "hydrocodone",
+        "paracetamol"
+      ],
+      "form": "tablet"
+    },
+    "cogesic": {
+      "ingredients": [
+        "hydrocodone",
+        "paracetamol"
+      ],
+      "form": "tablet"
+    },
+    "lorcet": {
+      "ingredients": [
+        "hydrocodone",
+        "paracetamol"
+      ],
+      "form": "tablet"
+    },
+    "norco": {
+      "ingredients": [
+        "hydrocodone",
+        "paracetamol"
+      ],
+      "form": "tablet"
+    },
+    "vicodin": {
+      "ingredients": [
+        "hydrocodone",
+        "paracetamol"
+      ],
+      "form": "tablet"
+    },
+    "zydone": {
+      "ingredients": [
+        "hydrocodone",
+        "paracetamol"
+      ],
+      "form": "tablet"
+    },
+    "reprexain": {
+      "ingredients": [
+        "hydrocodone",
+        "ibuprofen"
+      ],
+      "form": "tablet"
+    },
+    "dilaudid": {
+      "ingredients": [
+        "hydromorphone"
+      ]
+    },
+    "demerol": {
+      "ingredients": [
+        "pethidine"
+      ]
+    },
+    "dolophine": {
+      "ingredients": [
+        "methadone"
+      ],
+      "form": "tablet"
+    },
+    "methadose": {
+      "ingredients": [
+        "methadone"
+      ]
+    },
+    "duramorph": {
+      "ingredients": [
+        "morphine"
+      ],
+      "form": "injection"
+    },
+    "infumorph": {
+      "ingredients": [
+        "morphine"
+      ],
+      "form": "injection"
+    },
+    "mitigo": {
+      "ingredients": [
+        "morphine"
+      ],
+      "form": "injection"
+    },
+    "kadian": {
+      "ingredients": [
+        "morphine"
+      ],
+      "form": "capsule"
+    },
+    "morphabond": {
+      "ingredients": [
+        "morphine"
+      ],
+      "form": "tablet"
+    },
+    "morphabond er": {
+      "ingredients": [
+        "morphine"
+      ],
+      "form": "tablet"
+    },
+    "ms contin": {
+      "ingredients": [
+        "morphine"
+      ],
+      "form": "tablet"
+    },
+    "roxybond": {
+      "ingredients": [
+        "oxycodone"
+      ],
+      "form": "tablet"
+    },
+    "oxaydo": {
+      "ingredients": [
+        "oxycodone"
+      ],
+      "form": "tablet"
+    },
+    "oxycontin": {
+      "ingredients": [
+        "oxycodone"
+      ],
+      "form": "tablet"
+    },
+    "roxicodone": {
+      "ingredients": [
+        "oxycodone"
+      ],
+      "form": "tablet"
+    },
+    "xtampza": {
+      "ingredients": [
+        "oxycodone"
+      ],
+      "form": "capsule"
+    },
+    "xtampza er": {
+      "ingredients": [
+        "oxycodone"
+      ],
+      "form": "capsule"
+    },
+    "percocet": {
+      "ingredients": [
+        "oxycodone",
+        "paracetamol"
+      ],
+      "form": "tablet"
+    },
+    "percodan": {
+      "ingredients": [
+        "oxycodone",
+        "aspirin"
+      ],
+      "form": "tablet"
+    },
+    "opana": {
+      "ingredients": [
+        "oxymorphone"
+      ],
+      "form": "tablet"
+    },
+    "opana er": {
+      "ingredients": [
+        "oxymorphone"
+      ],
+      "form": "tablet"
     }
   },
   "_ingredients_doc": "Canonical ingredient -> rule groups, the routes the ingredient is made for, and spellings seen in records (whole words; misspellings of 6+ letters are also matched by similarity). An ingredient made for one route only fixes a line's route; several routes leave it to the written form or the prescription template.",
@@ -862,6 +1077,155 @@
       "names": [
         "calcitriol"
       ]
+    },
+    "tramadol": {
+      "groups": [
+        "opioid"
+      ],
+      "routes": [
+        "oral",
+        "injection"
+      ],
+      "names": [
+        "tramadol"
+      ],
+      "default_route": "oral"
+    },
+    "tapentadol": {
+      "groups": [
+        "opioid"
+      ],
+      "routes": [
+        "oral"
+      ],
+      "names": [
+        "tapentadol"
+      ]
+    },
+    "codeine": {
+      "groups": [
+        "opioid"
+      ],
+      "routes": [
+        "oral"
+      ],
+      "names": [
+        "codeine",
+        "codein"
+      ],
+      "ndps_essential_narcotic": true
+    },
+    "fentanyl": {
+      "groups": [
+        "opioid"
+      ],
+      "routes": [
+        "topical",
+        "oral",
+        "injection"
+      ],
+      "names": [
+        "fentanyl",
+        "fentanil"
+      ],
+      "ndps_essential_narcotic": true
+    },
+    "hydrocodone": {
+      "groups": [
+        "opioid"
+      ],
+      "routes": [
+        "oral"
+      ],
+      "names": [
+        "hydrocodone"
+      ],
+      "ndps_essential_narcotic": true
+    },
+    "benzhydrocodone": {
+      "groups": [
+        "opioid"
+      ],
+      "routes": [
+        "oral"
+      ],
+      "names": [
+        "benzhydrocodone"
+      ]
+    },
+    "hydromorphone": {
+      "groups": [
+        "opioid"
+      ],
+      "routes": [
+        "oral",
+        "injection"
+      ],
+      "names": [
+        "hydromorphone"
+      ],
+      "default_route": "oral"
+    },
+    "pethidine": {
+      "groups": [
+        "opioid"
+      ],
+      "routes": [
+        "oral",
+        "injection"
+      ],
+      "names": [
+        "pethidine",
+        "meperidine"
+      ]
+    },
+    "methadone": {
+      "groups": [
+        "opioid"
+      ],
+      "routes": [
+        "oral"
+      ],
+      "names": [
+        "methadone"
+      ],
+      "ndps_essential_narcotic": true
+    },
+    "morphine": {
+      "groups": [
+        "opioid"
+      ],
+      "routes": [
+        "oral",
+        "injection"
+      ],
+      "names": [
+        "morphine"
+      ],
+      "ndps_essential_narcotic": true
+    },
+    "oxycodone": {
+      "groups": [
+        "opioid"
+      ],
+      "routes": [
+        "oral"
+      ],
+      "names": [
+        "oxycodone"
+      ],
+      "ndps_essential_narcotic": true
+    },
+    "oxymorphone": {
+      "groups": [
+        "opioid"
+      ],
+      "routes": [
+        "oral"
+      ],
+      "names": [
+        "oxymorphone"
+      ]
     }
   },
   "_groups_doc": "Rule group -> the registry medicine class it stands for. For corticosteroids and azoles the class depends on the route: topical -> topical_class, a systemic route -> systemic_class, an unclear route -> both (rules that need a systemic route then report it for checking, not as fact).",
@@ -912,6 +1276,14 @@
         "vitamin d"
       ],
       "problem": "Calcium / vitamin D"
+    },
+    "opioid": {
+      "class": "Opioid analgesic",
+      "terms": [
+        "opioid",
+        "opioid painkiller"
+      ],
+      "problem": "Opioid painkiller use"
     }
   },
   "_forms_doc": "Dose-form words in a prescription line and the route they state.",
@@ -1013,5 +1385,6 @@
     }
   ],
   "_default_route_doc": "default_route: the route an ingredient is given by almost always in outpatient prescriptions. Used for a line with no written form only after the brand form and the prescription template; an ingredient commonly given by more than one route has none (route stays unclear).",
-  "_groups_terms_doc": "terms: words in a flag title that name the group; problem: the clinical problem label that links flags about the group (groups sharing a label are one problem)."
+  "_groups_terms_doc": "terms: words in a flag title that name the group; problem: the clinical problem label that links flags about the group (groups sharing a label are one problem).",
+  "_ndps_doc": "ndps_essential_narcotic: the ingredient is on India's notified list of Essential Narcotic Drugs (NDPS Amendment Act 2014; Department of Revenue notification 5 May 2015), as listed in the National Cancer Grid guidelines for stocking and dispensing ENDs (Aug 2017). A prescription must state the total quantity, daily dose and duration. Regulatory status, not a clinical flag."
 }

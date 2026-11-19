@@ -72,10 +72,6 @@ def item_key(item):
     return f"{folder}/{item['file_name']}" if folder else item["file_name"]
 
 
-def skip_key(item):
-    return item["file_name"]
-
-
 def _file_name(storage_key):
     """Derive the file name from a storage_key (an object path, not a URL,
     so it is used as-is with no URL-decoding)."""

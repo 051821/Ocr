@@ -81,6 +81,10 @@ def get_medication_journey(patient_id):
     return _request("GET", f"/patients/{patient_id}/medications")
 
 
+def get_referrals(patient_id):
+    return _request("GET", f"/patients/{patient_id}/referrals")["referrals"]
+
+
 def get_side_effects(patient_id, use_ai=False):
     timeout = LLM_TIMEOUT if use_ai else FAST_TIMEOUT
     return _request("GET", f"/patients/{patient_id}/side-effects", timeout=timeout, params={"use_ai": use_ai})
